@@ -1,8 +1,23 @@
-# Welcome to your Expo app 👋
+# Attendify Mobile App
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+The Smart Attendance System is an advanced solution that seamlessly integrates geolocation, face recognition, and Bluetooth proximity to simplify attendance management. Features like real-time tracking, automated timers, and detailed reports make recording attendance easier than ever. 
 
-## Get started
+
+## Features
+
+1. **Location-Based Tracking:** Automated detection of entry and exit using geofencing to ensure accurate attendance logs.
+
+2. **Bluetooth Proximity Monitoring:** Tracks employee proximity to their assigned workspace, triggering timers and notifications for efficiency.
+
+3. **Facial Recognition:** Advanced authentication via face recognition ensures security and reliability.
+
+4. **End-of-Day Summaries:** Attendance data consolidated and sent to the backend for detailed analysis.
+
+5. **Attendance Reports:** Comprehensive reports with visually appealing graphs and summaries for individuals and teams.
+
+6. **Manager Tools:** Manage team attendance with features like manual time adjustments, attendance correction approvals, and action logs.
+
+
 
 1. Install dependencies
 
@@ -25,15 +40,7 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
-## Get a fresh project
 
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
 
 ## Learn more
 
@@ -41,10 +48,3 @@ To learn more about developing your project with Expo, look at the following res
 
 - [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
 - [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
