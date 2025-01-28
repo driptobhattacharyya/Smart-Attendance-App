@@ -18,7 +18,7 @@ The Smart Attendance System is an advanced solution that seamlessly integrates g
 6. **Manager Tools:** Manage team attendance with features like manual time adjustments, attendance correction approvals, and action logs.
 
 
-
+## Getting started with development:
 1. Install dependencies
 
    ```bash
@@ -42,7 +42,7 @@ You can start developing by editing the files inside the **app** directory. This
 
 
 
-## Learn more
+## Learn more about Expo
 
 To learn more about developing your project with Expo, look at the following resources:
 
