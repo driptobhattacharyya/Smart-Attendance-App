@@ -1,6 +1,10 @@
 # Attendify Mobile App
 
-This GitHub repository contains only the code for the mobile app, developed using React Native. 
+This GitHub repository contains only the code for the mobile app, developed using React Native. Creating new accounts is currently unavailable, so....
+
+#### Use these credentials instead
+**employee ID:** EMP003
+**password:** password
 
 
 ## Features
