@@ -1,6 +1,6 @@
 # Attendify Mobile App
 
-The Smart Attendance System is an advanced solution that seamlessly integrates geolocation, face recognition, and Bluetooth proximity to simplify attendance management. Features like real-time tracking, automated timers, and detailed reports make recording attendance easier than ever. 
+This GitHub repository contains only the code for the mobile app, developed using React Native. 
 
 
 ## Features
