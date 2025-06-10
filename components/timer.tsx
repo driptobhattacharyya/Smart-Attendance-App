@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useContext } from "react";
 import { Text, View, StyleSheet, FlatList } from "react-native";
 import { AppContext } from "../app/AppContext";
+import { API_CONFIG } from "@/app/config";
 
 const Timer = () => {
   const {
@@ -52,18 +53,16 @@ const Timer = () => {
         date: today,
       };
 
-      // API endpoint URL
-      const url =
-        "https://idx-backendattendance-1890784-k27k4ovjaq-ue.a.run.app/api/user/mark_attendance"; // Replace with actual endpoint
-
-      // Fetch POST request
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
+      const response = await fetch(
+        `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.ATTENDANCE}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        }
+      );
       
       if (response.ok) {
         const data = await response.json();

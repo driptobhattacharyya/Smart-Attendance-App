@@ -30,7 +30,8 @@
         "googleMaps": {
           "apiKey": "AIzaSyAUGOo13z3__Rt6cKORUscFn6KT6sSGZkY"
         }
-      }
+      },
+      "buildGradle": "repositories { maven { url 'https://jitpack.io' } }"
     },
     "web": {
       "bundler": "metro",

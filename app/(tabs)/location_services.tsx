@@ -13,22 +13,48 @@ import * as Location from "expo-location";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useEffect, useRef, useState, useContext } from "react";
 import haversine from "haversine-distance";
-// import * as FileSystem from "expo-file-system";
-import { AppContext } from "../AppContext"; // Import AppContext
-
-const INITIAL_REGION = {
-  latitude: 22.44368,
-  longitude: 88.415173,
-  latitudeDelta: 0.05,
-  longitudeDelta: 0.05,
-};
-const CENTER_COORDINATE = { latitude: 22.44368, longitude: 88.415173 };
-const RADIUS = 1000;
+import * as SecureStore from "expo-secure-store";
+import { AppContext } from "../AppContext";
 
 export default function LocationServices() {
-  const {handleEntry, handleExit } = useContext(AppContext);
+  const { handleEntry, handleExit } = useContext(AppContext);
   const [locationPermission, setLocationPermission] = useState(false);
   const [isInsideCircle, setIsInsideCircle] = useState(false);
+  const [officeLocation, setOfficeLocation] = useState({
+    latitude: 0,
+    longitude: 0,
+    radius: 0,
+    name: '',
+  });
+
+  useEffect(() => {
+    const loadOfficeLocation = async () => {
+      try {
+        const [latitude, longitude, radius, name] = await Promise.all([
+          SecureStore.getItemAsync("office_latitude"),
+          SecureStore.getItemAsync("office_longitude"),
+          SecureStore.getItemAsync("office_radius"),
+          SecureStore.getItemAsync("office_name"),
+        ]);
+
+        if (latitude && longitude && radius) {
+          setOfficeLocation({
+            latitude: parseFloat(latitude),
+            longitude: parseFloat(longitude),
+            radius: parseFloat(radius),
+            name: name || 'Office',
+          });
+        } else {
+          Alert.alert("Error", "Office location not found. Please log in again.");
+        }
+      } catch (error) {
+        console.error("Error loading office location:", error);
+        Alert.alert("Error", "Failed to load office location. Please try again.");
+      }
+    };
+
+    loadOfficeLocation();
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -40,12 +66,16 @@ export default function LocationServices() {
       setLocationPermission(true);
       startLocationTracking();
     })();
-  }, []);
+  }, [officeLocation]);
 
   const [entryTime, setEntryTime] = useState<any | null>(null);
   const [exitTime, setExitTime] = useState<any | null>(null);
 
   const startLocationTracking = () => {
+    if (!officeLocation.latitude || !officeLocation.longitude || !officeLocation.radius) {
+      return;
+    }
+
     let wasInsideCircle = false;
     let localEntryTime = null;
 
@@ -57,13 +87,15 @@ export default function LocationServices() {
           longitude: location.coords.longitude,
         };
         
-        const distanceFromCenter = haversine(CENTER_COORDINATE, userLocation);
-        const isCurrentlyInside = distanceFromCenter <= RADIUS;
+        const distanceFromCenter = haversine(
+          { latitude: officeLocation.latitude, longitude: officeLocation.longitude },
+          userLocation
+        );
+        const isCurrentlyInside = distanceFromCenter <= officeLocation.radius;
 
         if (isCurrentlyInside && !wasInsideCircle) {
           // User just entered the circle
           const entryTimestamp = new Date();
-          // setEntryTime(entryTimestamp.getTime());
           localEntryTime = entryTimestamp.getTime();
           handleEntry();
           Alert.alert("Entered the circle!");
@@ -81,8 +113,6 @@ export default function LocationServices() {
           // Reset the state
           wasInsideCircle = false;
           localEntryTime = null;
-          // setEntryTime(null);
-          // setExitTime(null);
         }
       } catch (error) {
         console.error("Error fetching location:", error);
@@ -105,17 +135,29 @@ export default function LocationServices() {
   }, []);
 
   const focusMap = () => {
-    const FIEM = {
-      latitude: 22.44368,
-      longitude: 88.415173,
+    if (!officeLocation.latitude || !officeLocation.longitude) {
+      return;
+    }
+
+    const officeRegion = {
+      latitude: officeLocation.latitude,
+      longitude: officeLocation.longitude,
       latitudeDelta: 0.01,
       longitudeDelta: 0.01,
     };
     mapRef.current?.animateCamera(
-      { center: FIEM, zoom: 15 },
+      { center: officeRegion, zoom: 15 },
       { duration: 3000 }
     );
   };
+
+  if (!officeLocation.latitude || !officeLocation.longitude) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text>Loading office location...</Text>
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={{ flex: 1 }}>
@@ -124,23 +166,28 @@ export default function LocationServices() {
           <MapView
             style={StyleSheet.absoluteFillObject}
             provider={PROVIDER_GOOGLE}
-            initialRegion={INITIAL_REGION}
+            initialRegion={{
+              latitude: officeLocation.latitude,
+              longitude: officeLocation.longitude,
+              latitudeDelta: 0.05,
+              longitudeDelta: 0.05,
+            }}
             showsCompass
             showsUserLocation
             showsMyLocationButton
             ref={mapRef}
           >
             <Circle
-              center={CENTER_COORDINATE}
-              radius={RADIUS}
+              center={{ latitude: officeLocation.latitude, longitude: officeLocation.longitude }}
+              radius={officeLocation.radius}
               strokeWidth={1}
               strokeColor={"#1a66ff"}
               fillColor={"rgba(230,238,255,0.5)"}
             />
             <Marker
-              coordinate={CENTER_COORDINATE}
-              title="FIEM"
-              description="Testiing testing!"
+              coordinate={{ latitude: officeLocation.latitude, longitude: officeLocation.longitude }}
+              title={officeLocation.name}
+              description="Your office location"
             />
           </MapView>
         )}
@@ -150,6 +197,12 @@ export default function LocationServices() {
 }
 
 const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F8F4FF',
+  },
   titleContainer: {
     flexDirection: "row",
     alignItems: "center",

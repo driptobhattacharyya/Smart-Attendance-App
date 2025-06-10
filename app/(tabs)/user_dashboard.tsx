@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useContext } from "react";
 import {
   View,
   Text,
@@ -14,25 +14,49 @@ import * as SecureStore from "expo-secure-store";
 import { useRouter } from "expo-router";
 import { format } from "date-fns";
 import RequestForm from "@/components/request_form";
+import { API_CONFIG } from "@/app/config";
+import { AppContext } from "@/app/AppContext";
+
+interface AttendanceRecord {
+  total_time: number;
+  date: string;
+}
+
+interface FormData {
+  reason: string;
+  date_range: string;
+  entry_time: string;
+  exit_time: string;
+  description: string;
+}
+
+interface Summary {
+  totalHours: number;
+  averageDailyTime: string;
+  daysPresent: number;
+}
 
 const UserDashboard = () => {
   const navigation = useNavigation();
   const router = useRouter();
+  const context = useContext(AppContext);
+  if (!context) {
+    throw new Error('UserDashboard must be used within an AppProvider');
+  }
+  const { handleLogout } = context;
   const [name, setName] = useState("");
-  const [attendanceData, setAttendanceData] = useState([]);
+  const [attendanceData, setAttendanceData] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [summary, setSummary] = useState({
+  const [summary, setSummary] = useState<Summary>({
     totalHours: 0,
     averageDailyTime: "0h",
     daysPresent: 0,
   });
   const [isModalVisible, setIsModalVisible] = useState(false);
 
-  const handleFormSubmit = (formData) => {
+  const handleFormSubmit = (formData: FormData) => {
     console.log("Form Submitted:", formData);
     setIsModalVisible(false);
-    // You can make the API call to submit the form data here
-    // Example: await axios.post('/api/attendance-requests', formData);
   };
 
   useEffect(() => {
@@ -47,7 +71,7 @@ const UserDashboard = () => {
         }
 
         const response = await fetch(
-          `https://idx-backendattendance-1890784-k27k4ovjaq-ue.a.run.app/api/user/get_attendance/${employeeId}`,
+          `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.GET_ATTENDANCE}/${employeeId}`,
           {
             method: "GET",
             headers: {
@@ -69,14 +93,14 @@ const UserDashboard = () => {
         setAttendanceData(data.attendance);
 
         const totalHours = data.attendance.reduce(
-          (sum, record) => sum + (record.total_time || 0) / 60,
+          (sum: number, record: AttendanceRecord) => sum + (record.total_time || 0) / 60,
           0
         ); // Convert minutes to hours
         const daysPresent = data.attendance.length;
         const averageDailyTime = (totalHours / daysPresent).toFixed(2);
 
         setSummary({
-          totalHours: totalHours.toFixed(2), // Round to 2 decimals
+          totalHours: Number(totalHours.toFixed(2)), // Round to 2 decimals
           averageDailyTime: `${averageDailyTime}h`,
           daysPresent,
         });
@@ -93,15 +117,18 @@ const UserDashboard = () => {
     fetchAttendanceData();
   }, []);
 
-  const handleLogout = () => {
+  const handleLogoutPress = async () => {
     Alert.alert("Log Out", "Are you sure you want to log out?", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Log Out",
         onPress: async () => {
-          await SecureStore.deleteItemAsync("employee_id");
-          console.log("employee_id cleared from session");
-          router.replace("/");
+          try {
+            await handleLogout();
+          } catch (error) {
+            console.error('Logout error:', error);
+            Alert.alert('Error', 'Failed to log out. Please try again.');
+          }
         },
       },
     ]);
@@ -116,19 +143,17 @@ const UserDashboard = () => {
     );
   }
 
-  const Labels = ({ x, y, bandwidth, data }) => {
-    return data.map((value, index) => (
+  const Labels = ({ x, y, bandwidth, data }: { x: number; y: number; bandwidth: number; data: any[] }) => {
+    return data.map((value: any, index: number) => (
       <Text
         key={index}
-        style={{
-          position: "absolute",
-          left: x(index) + bandwidth / 2 - 10,
-          top: y(value) - 20,
-          fontSize: 12,
-          color: "#442c91",
-        }}
+        x={x(index) + bandwidth / 2}
+        y={y(value) - 10}
+        fontSize={14}
+        fill="black"
+        textAnchor="middle"
       >
-        {value}h
+        {value}
       </Text>
     ));
   };
@@ -154,7 +179,7 @@ const UserDashboard = () => {
         <Text style={styles.greeting}>
           Hello, {name ? ` ${name}` : "User"}!
         </Text>
-        <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
+        <TouchableOpacity onPress={handleLogoutPress} style={styles.logoutButton}>
           <Text style={styles.logoutText}>Log Out</Text>
         </TouchableOpacity>
       </View>

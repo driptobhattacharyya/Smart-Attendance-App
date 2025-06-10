@@ -1,5 +1,7 @@
 import React, { useContext, useRef, useState } from "react";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
+import * as SecureStore from "expo-secure-store";
+import { Alert } from "react-native";
 
 import {
   View,
@@ -19,6 +21,7 @@ import * as FileSystem from "expo-file-system";
 import { AppContext } from "@/app/AppContext";
 import { get } from "react-native/Libraries/TurboModule/TurboModuleRegistry";
 import PhotoPreviewSection from "./PhotoPreviewSection";
+import { API_CONFIG } from '@/app/config';
 
 const FaceRecog = () => {
   const [isLoading, setIsLoading] = useState(false);
@@ -72,7 +75,6 @@ const FaceRecog = () => {
         console.log("Ok 0");
         const options = {
           quality: 0.9,
-          // base64: true,
           imageType: "jpg",
           exif: false,
         };
@@ -82,21 +84,24 @@ const FaceRecog = () => {
         setPhoto(takePhoto);
         setIsLoading(true);
 
-        // Fetch the file as Blob
-        const response0 = await fetch(takePhoto.uri);
-        const photoBlob = await response0.blob();
-        console.log("Blob:", photoBlob);
-        
+        // Get person_id from SecureStore
+        const personId = await SecureStore.getItemAsync("person_id");
+        if (!personId) {
+          Alert.alert("Error", "No face ID found. Please log in again.");
+          return;
+        }
+
         const formData = new FormData();
         formData.append("image", {
           uri: takePhoto.uri,
-          name: "photo.jpg", // Filename
-          type: "image/jpeg", // MIME type
+          name: "photo.jpg",
+          type: "image/jpeg",
         });
-        formData.append("person_id", "dafe4ea7-00c0-4265-9a8f-1bcea379a1c0");
+        formData.append("person_id", personId);
+        
         console.log("Ok 2");
         const response = await fetch(
-          "https://idx-backendattendance-1890784-k27k4ovjaq-ue.a.run.app/api/face_recog/recognize",
+          `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.FACE_RECOG}`,
           {
             method: "POST",
             headers: {

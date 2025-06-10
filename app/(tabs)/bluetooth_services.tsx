@@ -13,15 +13,35 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { BleManager, Device } from "react-native-ble-plx";
 import { AppContext } from "../AppContext";
-
-const targetDeviceID = "75:5E:D6:EB:41:84";
+import * as SecureStore from "expo-secure-store";
 
 const BluetoothScanner = () => {
   const [bleManager] = useState(new BleManager());
   const [devices, setDevices] = useState([]);
   const [showInfo, setShowInfo] = useState(false);
-  const {isInBluetoothRange, setIsInBluetoothRange} = useContext(AppContext); // To track current state
-  const [lastMessage, setLastMessage] = useState(""); // To store and display the message
+  const {isInBluetoothRange, setIsInBluetoothRange} = useContext(AppContext);
+  const [lastMessage, setLastMessage] = useState("");
+  const [targetDeviceID, setTargetDeviceID] = useState<string | null>(null);
+
+  // Load target device ID from SecureStore
+  useEffect(() => {
+    const loadTargetDevice = async () => {
+      try {
+        const savedDeviceId = await SecureStore.getItemAsync('bluetooth_device_id');
+        console.log("Saved device ID:", savedDeviceId);
+        if (savedDeviceId) {
+          setTargetDeviceID(savedDeviceId);
+        } else {
+          console.log('No saved Bluetooth device ID found');
+        }
+      } catch (error) {
+        console.error('Error loading Bluetooth device ID:', error);
+      }
+      console.log("Target device ID:", targetDeviceID);
+    };
+
+    loadTargetDevice();
+  }, []);
 
   useEffect(() => {
     const startScan = async () => {
@@ -78,7 +98,7 @@ const BluetoothScanner = () => {
     // Start the scan and repeat every few seconds
     const intervalId = setInterval(() => {
       startScan();
-    }, 15000); // Refresh every 15 seconds
+    }, 15000);
     
     // Cleanup on component unmount
     return () => {
@@ -106,6 +126,8 @@ const BluetoothScanner = () => {
 
   // Monitor target device proximity
   useEffect(() => {
+    if (!targetDeviceID) return; // Don't check if no target device is set
+
     const targetDevice = devices.find((d) => d.id === targetDeviceID);
     
     if (targetDevice && targetDevice.rssi > -70) {
@@ -123,7 +145,7 @@ const BluetoothScanner = () => {
         console.log("Target device not detected."); // For debugging
       }
     }
-  }, [devices, isInBluetoothRange]);
+  }, [devices, isInBluetoothRange, targetDeviceID]);
   
   return (
     <View style={styles.container}>
