@@ -1,4 +1,6 @@
-"""Face detection + recognition with OpenCV's open-source models.
+"""Face providers: pluggable face enrolment + verification.
+
+``FACE_PROVIDER=opencv`` (default) uses OpenCV's open-source models:
 
 * Detector: YuNet (MIT licence)        -> face_detection_yunet_2023mar.onnx
 * Recogniser: SFace (Apache-2.0)        -> face_recognition_sface_2021dec.onnx
@@ -7,13 +9,16 @@ Both come from https://github.com/opencv/opencv_zoo and are downloaded by
 ``scripts/download_models.sh`` (the Dockerfile runs it at build time).
 
 Only the 128-number embedding is stored per user, never the photo.
+
+``FACE_PROVIDER=azure`` uses Azure AI Face (see ``AzureFaceProvider``).
 """
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from pathlib import Path
-from typing import Protocol
+from typing import Any, NoReturn, Protocol
 
 import numpy as np
 
@@ -23,6 +28,27 @@ RECOGNIZER_FILE = "face_recognition_sface_2021dec.onnx"
 
 class FaceError(Exception):
     """A user-facing problem with the submitted photo (no face, several faces...)."""
+
+
+class FaceUnavailableError(Exception):
+    """The face service could not be reached or rejected our credentials (maps to 503)."""
+
+
+class FaceProvider(Protocol):
+    """What the API needs from a face backend."""
+
+    name: str
+
+    def is_enrolled(self, user: dict) -> bool: ...
+
+    async def enroll(self, user: dict, image: bytes) -> dict:
+        """Register the user's face. Returns the fields to ``$set`` on the user document."""
+
+    async def verify(self, user: dict, image: bytes) -> tuple[bool, float]:
+        """Compare a live photo with the enrolled face -> (verified, score)."""
+
+    async def reset(self, user: dict) -> list[str]:
+        """Forget the user's face. Returns the user-document fields to ``$unset``."""
 
 
 class FaceEngine(Protocol):
@@ -90,3 +116,190 @@ class OpenCVFaceEngine:
 
     def similarity(self, a: list[float], b: list[float]) -> float:
         return cosine_similarity(a, b)
+
+
+class OpenCVFaceProvider:
+    """Stores the SFace embedding on the user (``face_embedding``); compares locally."""
+
+    name = "opencv"
+
+    def __init__(self, engine: FaceEngine, threshold: float):
+        self._engine = engine
+        self._threshold = threshold
+
+    def is_enrolled(self, user: dict) -> bool:
+        return bool(user.get("face_embedding"))
+
+    async def enroll(self, user: dict, image: bytes) -> dict:
+        embedding = await asyncio.to_thread(self._engine.embed, image)
+        return {"face_embedding": embedding}
+
+    async def verify(self, user: dict, image: bytes) -> tuple[bool, float]:
+        embedding = await asyncio.to_thread(self._engine.embed, image)
+        score = self._engine.similarity(user["face_embedding"], embedding)
+        return score >= self._threshold, score
+
+    async def reset(self, user: dict) -> list[str]:
+        return ["face_embedding"]
+
+
+class AzureFaceProvider:
+    """Azure AI Face (``azure-ai-vision-face``): one LargePersonGroup, one person per user.
+
+    Enrolment: create_person + add_face + train. Verification: detect the live photo, then
+    ``verify_from_large_person_group`` against the stored ``azure_person_id``. Only the Azure
+    person id is kept on our side.
+
+    NOTE: Microsoft gates face identification/verification behind Limited Access approval.
+    Apply at https://aka.ms/facerecognition and use a resource that has been approved,
+    otherwise these calls fail with an access-denied error (surfaced here as a 503).
+
+    The SDK is synchronous, so every call runs in a worker thread. The SDK is imported lazily
+    (install with ``uv sync --extra azure``); tests inject mock clients.
+    """
+
+    name = "azure"
+    # detection_03 + recognition_04 are Azure's most accurate models.
+    DETECTION_MODEL = "detection_03"
+    RECOGNITION_MODEL = "recognition_04"
+
+    def __init__(
+        self,
+        endpoint: str = "",
+        key: str = "",
+        group_id: str = "attendify",
+        *,
+        face_client: Any = None,
+        admin_client: Any = None,
+    ):
+        if face_client is None or admin_client is None:
+            try:
+                from azure.ai.vision.face import FaceAdministrationClient, FaceClient
+                from azure.core.credentials import AzureKeyCredential
+            except ImportError as exc:  # pragma: no cover - depends on the optional extra
+                raise RuntimeError(
+                    "FACE_PROVIDER=azure needs the optional SDK: uv sync --extra azure"
+                ) from exc
+            if not endpoint or not key:
+                raise RuntimeError(
+                    "Set AZURE_FACE_ENDPOINT and AZURE_FACE_KEY for FACE_PROVIDER=azure"
+                )
+            credential = AzureKeyCredential(key)
+            face_client = face_client or FaceClient(endpoint, credential)
+            admin_client = admin_client or FaceAdministrationClient(endpoint, credential)
+        self._face = face_client
+        self._groups = admin_client.large_person_group
+        self._group_id = group_id
+        self._group_ready = False
+        self._lock = threading.Lock()
+
+    def is_enrolled(self, user: dict) -> bool:
+        return bool(user.get("azure_person_id"))
+
+    # ----- blocking helpers (run in a thread) -----
+
+    def _ensure_group(self) -> None:
+        with self._lock:
+            if self._group_ready:
+                return
+            try:
+                self._groups.get(self._group_id)
+            except Exception as exc:
+                if _status(exc) != 404:
+                    raise
+                self._groups.create(
+                    self._group_id,
+                    name="Attendify employees",
+                    recognition_model=self.RECOGNITION_MODEL,
+                )
+            self._group_ready = True
+
+    def _detect_one(self, image: bytes) -> Any:
+        try:
+            faces = self._face.detect(
+                image,
+                detection_model=self.DETECTION_MODEL,
+                recognition_model=self.RECOGNITION_MODEL,
+                return_face_id=True,
+            )
+        except Exception as exc:
+            _reraise(exc)
+        if not faces:
+            raise FaceError("No face detected. Face the camera in good light and try again.")
+        if len(faces) > 1:
+            raise FaceError("More than one face detected. Make sure only you are in frame.")
+        return faces[0]
+
+    def _enroll(self, user: dict, image: bytes) -> dict:
+        self._detect_one(image)  # reject no-face / several faces before creating anything
+        try:
+            self._ensure_group()
+            person = self._groups.create_person(
+                self._group_id, name=user["employee_id"], user_data=user["employee_id"]
+            )
+            try:
+                self._groups.add_face(
+                    self._group_id,
+                    person.person_id,
+                    image,
+                    detection_model=self.DETECTION_MODEL,
+                )
+                self._groups.begin_train(self._group_id).result()
+            except Exception:
+                self._groups.delete_person(self._group_id, person.person_id)
+                raise
+        except Exception as exc:
+            _reraise(exc)
+        return {"azure_person_id": person.person_id}
+
+    def _verify(self, user: dict, image: bytes) -> tuple[bool, float]:
+        face = self._detect_one(image)
+        try:
+            result = self._face.verify_from_large_person_group(
+                face_id=face.face_id,
+                large_person_group_id=self._group_id,
+                person_id=user["azure_person_id"],
+            )
+        except Exception as exc:
+            _reraise(exc)
+        return bool(result.is_identical), float(result.confidence)
+
+    def _reset(self, user: dict) -> None:
+        try:
+            self._groups.delete_person(self._group_id, user["azure_person_id"])
+        except Exception as exc:
+            if _status(exc) != 404:  # already gone is fine
+                _reraise(exc)
+
+    # ----- FaceProvider API -----
+
+    async def enroll(self, user: dict, image: bytes) -> dict:
+        return await asyncio.to_thread(self._enroll, user, image)
+
+    async def verify(self, user: dict, image: bytes) -> tuple[bool, float]:
+        return await asyncio.to_thread(self._verify, user, image)
+
+    async def reset(self, user: dict) -> list[str]:
+        if user.get("azure_person_id"):
+            await asyncio.to_thread(self._reset, user)
+        return ["azure_person_id"]
+
+
+def _status(exc: Exception) -> int | None:
+    return getattr(exc, "status_code", None)
+
+
+def _translate(exc: Exception) -> Exception:
+    """Map Azure SDK errors onto our own: bad photo -> FaceError, anything else -> unavailable."""
+    if isinstance(exc, FaceError | FaceUnavailableError):
+        return exc
+    if _status(exc) == 400:
+        return FaceError("The photo could not be used. Please try again with a clear photo.")
+    return FaceUnavailableError(f"Face service error: {exc}")
+
+
+def _reraise(exc: Exception) -> NoReturn:
+    translated = _translate(exc)
+    if translated is exc:
+        raise exc
+    raise translated from exc

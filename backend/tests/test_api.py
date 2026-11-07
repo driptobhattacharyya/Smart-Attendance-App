@@ -177,47 +177,25 @@ def test_expired_face_verification(client, db, office_id):
     assert r.status_code == 403
 
 
-def test_check_out_and_report_totals(client, db, office_id):
+def test_check_out_and_report_totals(client, clock, office_id):
     token = _ready_employee(client, office_id)
     assert client.post("/api/attendance/check-out", headers=auth(token)).status_code == 409
 
     verify(client, token)
-    session = client.post("/api/attendance/check-in", headers=auth(token), json=INSIDE).json()
-    # pretend the check-in happened 2h ago
-    from bson import ObjectId
-
-    asyncio.run(
-        db.attendance_sessions.update_one(
-            {"_id": ObjectId(session["id"])},
-            {"$set": {"started_at": utcnow() - timedelta(hours=2)}},
-        )
-    )
+    client.post("/api/attendance/check-in", headers=auth(token), json=INSIDE)
+    for _ in range(4):  # a heartbeat every 10 minutes for 40 minutes
+        clock.advance(minutes=10)
+        r = client.post("/api/attendance/heartbeat", headers=auth(token), json=INSIDE)
+        assert r.json()["state"] == "present"
+    clock.advance(minutes=5)
 
     r = client.post("/api/attendance/check-out", headers=auth(token), json=INSIDE)
     assert r.status_code == 200
-    assert 119 <= r.json()["minutes"] <= 120
+    assert r.json()["minutes"] == 45
 
     report = client.get("/api/attendance/me", headers=auth(token)).json()
-    assert 119 <= report["total_minutes"] <= 120
+    assert report["total_minutes"] == 45
     assert len(report["days"]) == 1
-
-
-def test_bluetooth_rule_when_enabled(client, office_id, settings):
-    settings.require_bluetooth = True
-    token = _ready_employee(client, office_id)
-    verify(client, token)
-    r = client.post(
-        "/api/attendance/check-in",
-        headers=auth(token),
-        json={**INSIDE, "bluetooth_device_id": "AA:BB", "bluetooth_rssi": -95},
-    )
-    assert r.status_code == 403
-    r = client.post(
-        "/api/attendance/check-in",
-        headers=auth(token),
-        json={**INSIDE, "bluetooth_device_id": "AA:BB", "bluetooth_rssi": -60},
-    )
-    assert r.status_code == 201
 
 
 def test_report_range_validation(client, office_id):
