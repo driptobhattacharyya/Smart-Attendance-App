@@ -5,11 +5,13 @@ import Attendance from "./pages/Attendance.jsx";
 import Requests from "./pages/Requests.jsx";
 import Offices from "./pages/Offices.jsx";
 import Users from "./pages/Users.jsx";
+import Beacons from "./pages/Beacons.jsx";
 
 const TABS = [
   { id: "attendance", label: "Attendance", roles: ["manager", "admin"] },
   { id: "requests", label: "Requests", roles: ["manager", "admin"] },
   { id: "users", label: "People", roles: ["manager", "admin"] },
+  { id: "beacons", label: "Beacons", roles: ["manager", "admin"] },
   { id: "offices", label: "Offices", roles: ["admin"] },
 ];
 
@@ -77,6 +79,7 @@ export default function App() {
         {tab === "attendance" && <Attendance />}
         {tab === "requests" && <Requests />}
         {tab === "users" && <Users me={user} />}
+        {tab === "beacons" && <Beacons me={user} />}
         {tab === "offices" && <Offices />}
       </main>
     </div>
