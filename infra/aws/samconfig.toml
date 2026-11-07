@@ -1,0 +1,18 @@
+version = 0.1
+
+# Non-secret SAM defaults, shared by `sam deploy --guided` (which may rewrite this file) and CI.
+# Secrets (MongoUri, JwtSecret, OriginSecret) are never stored here; pass them with
+# --parameter-overrides or answer the guided prompts.
+[default.global.parameters]
+stack_name = "attendify-api"
+region = "ap-south-1"
+
+[default.build.parameters]
+cached = false
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = false
+fail_on_empty_changeset = false
+resolve_s3 = true
+resolve_image_repos = true

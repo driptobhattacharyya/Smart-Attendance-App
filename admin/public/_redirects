@@ -1,0 +1,3 @@
+# SPA fallback: unknown paths serve the app shell. Real static files (e.g. /download/) win,
+# and /api/* is handled by functions/api/[[path]].js (see _routes.json).
+/*  /index.html  200

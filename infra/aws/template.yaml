@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Attendify API - FastAPI on AWS Lambda (container image + Lambda Web Adapter) behind a Function URL
+
+Parameters:
+  MongoUri:
+    Type: String
+    NoEcho: true
+    Description: MongoDB Atlas connection string (mongodb+srv://user:pass@cluster/...)
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Long random string used to sign login tokens
+  OriginSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Shared secret the Cloudflare proxy sends as X-Origin-Auth (same value as ORIGIN_SECRET in Pages)
+  MongoDb:
+    Type: String
+    Default: attendify
+    Description: Database name inside the Atlas cluster
+  AllowSelfRegistration:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  PublicOrigin:
+    Type: String
+    Default: https://smartattendance.driptobhattacharyya.com
+    Description: Browser origin of the admin panel (only used for CORS; normally unused behind the proxy)
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 1024
+
+Resources:
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-api"
+      RetentionInDays: 30
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ApiLogGroup
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-api"
+      PackageType: Image
+      # python:3.12-slim, uv, the Lambda Web Adapter and all wheels have linux/arm64 builds.
+      Architectures: [arm64]
+      Environment:
+        Variables:
+          ENVIRONMENT: production
+          MONGODB_URI: !Ref MongoUri
+          MONGODB_DB: !Ref MongoDb
+          JWT_SECRET: !Ref JwtSecret
+          ORIGIN_SECRET: !Ref OriginSecret
+          CORS_ORIGINS: !Ref PublicOrigin
+          ALLOW_SELF_REGISTRATION: !Ref AllowSelfRegistration
+      FunctionUrlConfig:
+        AuthType: NONE # protected by the X-Origin-Auth shared secret inside the app
+        InvokeMode: BUFFERED
+    Metadata:
+      Dockerfile: Dockerfile.lambda
+      DockerContext: ../../backend
+      DockerTag: latest
+
+Outputs:
+  FunctionUrl:
+    Description: Set this as API_ORIGIN in Cloudflare Pages (no trailing slash needed)
+    Value: !GetAtt ApiFunctionUrl.FunctionUrl
+  FunctionName:
+    Value: !Ref ApiFunction
