@@ -315,7 +315,7 @@ export function Tabs<T extends string>({
 
 export function Table({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <div className={cx("scroll-thin overflow-x-auto", className)}>
+    <div className={cx("scroll-thin relative overflow-x-auto", className)}>
       <table className="w-full border-collapse text-left text-sm">{children}</table>
     </div>
   );

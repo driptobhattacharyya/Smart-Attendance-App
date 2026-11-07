@@ -169,8 +169,8 @@ function OfficeDialog({ office, onClose }: { office: Office | null; onClose: () 
   });
 
   const move = (la: number, ln: number) => {
-    setLat(la);
-    setLng(ln);
+    setLat(+la.toFixed(6));
+    setLng(+ln.toFixed(6));
     setPlaced(true);
   };
 

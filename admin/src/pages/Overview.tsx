@@ -45,7 +45,7 @@ function StatCard({ status, value, total }: { status: PresenceStatus; value: num
     <Link
       to={`/live?status=${status}`}
       title={STATUS_HELP[status]}
-      className="group rounded-xl border border-line bg-surface p-4 shadow-card transition-colors hover:border-line-strong hover:bg-surface-2/50"
+      className="group rounded-xl border border-line bg-surface p-4 max-sm:last:col-span-2 shadow-card transition-colors hover:border-line-strong hover:bg-surface-2/50"
     >
       <div className="flex items-center gap-2 text-[13px] text-muted">
         <span className={cx("size-2 rounded-full", DOT[STATUS_TONE[status]])} aria-hidden />
@@ -197,17 +197,17 @@ export function Overview() {
           </section>
 
           <div className="grid gap-6 lg:grid-cols-3">
-            <Card as="section" className="lg:col-span-2">
+            <Card as="section" className="flex min-w-0 flex-col lg:col-span-2">
               <CardHeader title="Hours worked" description="Last 14 days, all people in scope" />
-              <div className="px-2 pb-4 sm:px-3">
+              <div className="flex flex-1 flex-col px-2 pb-4 sm:px-3">
                 {!chart ? (
                   <Skeleton className="m-2 h-64" />
                 ) : chart.every((c) => c.worked === 0 && c.away === 0) ? (
                   <EmptyState title="No hours recorded yet" description="Worked time shows up here after people start checking in." className="py-12" />
                 ) : (
-                  <div role="img" aria-label="Area chart of worked and away hours for the last 14 days" className="h-64">
+                  <div role="img" aria-label="Area chart of worked and away hours for the last 14 days" className="min-h-64 flex-1">
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={chart} margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
+                      <AreaChart data={chart} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
                         <defs>
                           <linearGradient id="gWorked" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.35} />
@@ -229,7 +229,7 @@ export function Overview() {
                           axisLine={false}
                           tick={{ fill: "var(--muted)", fontSize: 12 }}
                           tickFormatter={(v: number) => `${v}h`}
-                          width={44}
+                          width={48}
                         />
                         <Tooltip content={ChartTooltip} cursor={{ stroke: "var(--line-strong)" }} />
                         <Area
@@ -264,7 +264,7 @@ export function Overview() {
               </div>
             </Card>
 
-            <div className="space-y-6">
+            <div className="min-w-0 space-y-6">
               <Card as="section">
                 <CardHeader title="Needs attention" description="Setup gaps and open items" />
                 <div className="space-y-2 px-4 pb-4 sm:px-5">

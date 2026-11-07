@@ -153,7 +153,10 @@ export function Live() {
                       <Avatar name={r.name} />
                       <div className="min-w-0">
                         <p className="truncate font-medium">{r.name}</p>
-                        <p className="text-xs text-muted">{r.employee_id}</p>
+                        <p className="text-xs text-muted">
+                          {r.employee_id}
+                          <span className="sm:hidden"> · {formatMinutes(r.today_minutes, "0m")} today</span>
+                        </p>
                       </div>
                     </div>
                   </Td>
