@@ -84,3 +84,26 @@ Times are office-local `HH:MM`. Escape with the `csv` module. Must be registered
 ## Request decision comment
 
 Already exists (`DecisionIn.comment`); the console shows it.
+
+## Consent and data retention (DPDP Act / Google Play "prominent disclosure")
+
+Setting `CONSENT_VERSION` (int, default `1`). Users store `consent: {version: int, accepted_at: datetime}`.
+
+- `UserOut` and the login/register `AuthOut` gain `consent_required: bool`
+  (true when the user has no consent or an older version).
+- `POST /auth/consent` — body `{version: int}`; 409 if `version != CONSENT_VERSION`;
+  stores consent and returns `UserOut`.
+- `POST /auth/consent/withdraw` — clears consent; also checks the user out if checked in.
+- **Check-in, heartbeat, face enrol and face verify** return **403** `{"detail": "Consent required"}`
+  while `consent_required` is true.
+- `GET /auth/me/export` — JSON with the user's profile (no password hash, no face embedding values,
+  only `face_enrolled`), sessions (with presence logs), and requests. Right of access.
+- Retention: setting `PRESENCE_RETENTION_DAYS` (default 90). Presence logs (`presence_log`,
+  `check_in`/`check_out` coordinates) of sessions whose `date` is older than that are removed
+  (`$unset`), keeping the worked/away totals. Runs (a) opportunistically at most once per hour per
+  process, triggered on check-in, and (b) on demand via `POST /admin/maintenance/prune` (admin) which
+  returns `{sessions_pruned: int}`.
+- `GET /consent/text` — public; `{version, title, body_markdown}` with the disclosure the app shows
+  (what is collected: location only while checked in, beacon signal strength, a face embedding not
+  the photo, timestamps; why; who sees it — the employee's managers and admins; retention 90 days;
+  how to withdraw). Text lives in `backend/app/consent.md` with `{retention_days}` substituted.
