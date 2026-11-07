@@ -248,7 +248,7 @@ export function Beacons() {
                         {b.name}
                         {!b.active && <Badge>Inactive</Badge>}
                       </p>
-                      <p className="font-mono text-xs text-muted md:hidden">
+                      <p className="font-mono text-xs whitespace-nowrap text-muted md:hidden">
                         {isDesk ? b.device?.hostname ?? "Not paired" : shortUuid(b.uuid)}
                       </p>
                     </Td>
@@ -264,7 +264,7 @@ export function Beacons() {
                           <Badge tone={state.tone} dot>
                             {state.label}
                           </Badge>
-                          {b.device?.hostname && <p className="mt-1 max-w-48 truncate font-mono text-xs text-muted">{b.device.hostname}</p>}
+                          {b.device?.hostname && <p className="mt-1 font-mono text-xs whitespace-nowrap text-muted">{b.device.hostname}</p>}
                         </>
                       ) : (
                         <span className="text-muted">—</span>
@@ -494,7 +494,7 @@ function BeaconDialog({
 }
 
 function formatCountdown(ms: number): string {
-  const total = Math.ceil(ms / 1000);
+  const total = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
