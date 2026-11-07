@@ -3,7 +3,16 @@ import { Alert, AppState } from "react-native";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import * as SecureStore from "expo-secure-store";
-import { apiFetch, BEACONS_KEY, clearSession, HEARTBEAT_INTERVAL_KEY, SECURE_BACKGROUND_OPTIONS } from "@/lib/api";
+import {
+  apiFetch,
+  BEACONS_KEY,
+  clearSession,
+  HEARTBEAT_INTERVAL_KEY,
+  isConsentRequiredError,
+  SECURE_BACKGROUND_OPTIONS,
+  setConsentRequiredListener,
+  storeConsentRequired,
+} from "@/lib/api";
 import { API_CONFIG } from "@/lib/config";
 import { hasBlePermissions, isBluetoothOn, requestBlePermissions, startBeaconScan } from "@/lib/ble";
 import {
@@ -61,6 +70,12 @@ interface AppContextType {
   refreshLocationPermissions: () => Promise<void>;
   isLoggedIn: boolean;
   setIsLoggedIn: React.Dispatch<React.SetStateAction<boolean>>;
+  /**
+   * True while the logged-in user has not accepted the current privacy notice. Nothing
+   * that uses location, Bluetooth or the camera runs while it is true.
+   */
+  consentRequired: boolean;
+  setConsentRequired: (required: boolean) => void;
   handleLogout: () => Promise<void>;
 }
 
@@ -73,6 +88,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [isInsideGeofence, setIsInsideGeofence] = useState(false);
   const [isFaceScanned, setIsFaceScanned] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [consentRequired, setConsentRequiredState] = useState(false);
+
+  const updateConsent = useCallback((required: boolean) => {
+    setConsentRequiredState(required);
+    storeConsentRequired(required);
+  }, []);
+
+  // Any 403 "Consent required" from the API reopens the consent screen.
+  useEffect(() => {
+    setConsentRequiredListener(() => updateConsent(true));
+    return () => setConsentRequiredListener(null);
+  }, [updateConsent]);
 
   const [openSession, setOpenSession] = useState<Session | null>(null);
   const [todayMinutes, setTodayMinutes] = useState(0);
@@ -172,7 +199,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, []);
 
   useEffect(() => {
-    if (!isLoggedIn || beacons.length === 0) {
+    if (!isLoggedIn || consentRequired || beacons.length === 0) {
       setBleStatus("idle");
       return;
     }
@@ -220,7 +247,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       stop?.();
       if (flush) clearInterval(flush);
     };
-  }, [isLoggedIn, beacons, scanRequest]);
+  }, [isLoggedIn, consentRequired, beacons, scanRequest]);
 
   const isNearBeacon = useMemo(() => {
     const now = Date.now();
@@ -247,12 +274,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Run the background task only while checked in (and allowed to).
   useEffect(() => {
     if (!isLoggedIn) return;
-    if (openSession?.source === "app" && locationPermissions.background) {
+    if (!consentRequired && openSession?.source === "app" && locationPermissions.background) {
       startBackgroundTracking(heartbeatSeconds).catch((e) => console.warn("Background tracking failed", e));
     } else {
       stopBackgroundTracking();
     }
-  }, [isLoggedIn, openSession?.id, openSession?.source, locationPermissions.background, heartbeatSeconds]);
+  }, [
+    isLoggedIn,
+    consentRequired,
+    openSession?.id,
+    openSession?.source,
+    locationPermissions.background,
+    heartbeatSeconds,
+  ]);
 
   // ---- check-in / check-out ---------------------------------------------
 
@@ -271,7 +305,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
       setAttendanceMessage("Checked in");
     } catch (error: any) {
-      setAttendanceMessage(error.message);
+      // A consent error reopens the consent screen (see the listener above); no alert needed.
+      if (!isConsentRequiredError(error)) setAttendanceMessage(error.message);
       if (error.status === 403) setIsFaceScanned(false);
     } finally {
       busy.current = false;
@@ -298,17 +333,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // The server decides; the app only asks at the right moments.
   useEffect(() => {
-    if (!isLoggedIn) return;
+    if (!isLoggedIn || consentRequired) return;
     if (isInsideGeofence && isFaceScanned && !openSession) checkIn();
     if (!isInsideGeofence && openSession && openSession.source === "app") checkOut();
-  }, [isLoggedIn, isInsideGeofence, isFaceScanned, openSession, checkIn, checkOut]);
+  }, [isLoggedIn, consentRequired, isInsideGeofence, isFaceScanned, openSession, checkIn, checkOut]);
 
   // ---- foreground heartbeats --------------------------------------------
 
   const sessionId = openSession?.source === "app" ? openSession.id : null;
 
   useEffect(() => {
-    if (!isLoggedIn || !sessionId) return;
+    if (!isLoggedIn || consentRequired || !sessionId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -346,6 +381,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           refreshStatus();
         }
       } catch (error: any) {
+        // Consent was withdrawn or never given: the listener shows the consent screen and this loop stops.
+        if (isConsentRequiredError(error)) return;
         if (error?.status === 409) {
           // Not checked in any more (closed elsewhere).
           setOpenSession(null);
@@ -363,7 +400,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [isLoggedIn, sessionId, currentReadings, refreshStatus]);
+  }, [isLoggedIn, consentRequired, sessionId, currentReadings, refreshStatus]);
 
   // ---- geofence callbacks & logout ----------------------------------------
 
@@ -382,6 +419,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     await stopBackgroundTracking();
     await clearSession();
     setIsLoggedIn(false);
+    setConsentRequiredState(false);
     setIsFaceScanned(false);
     setIsInsideGeofence(false);
     setOpenSession(null);
@@ -423,6 +461,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         refreshLocationPermissions,
         isLoggedIn,
         setIsLoggedIn,
+        consentRequired,
+        setConsentRequired: updateConsent,
         handleLogout,
       }}
     >

@@ -7,14 +7,18 @@ import {
   TouchableOpacity,
   Alert,
   ActivityIndicator,
+  Modal,
 } from "react-native";
 import { BarChart } from "react-native-gifted-charts";
 import * as SecureStore from "expo-secure-store";
+import * as FileSystem from "expo-file-system/legacy";
 import { useRouter } from "expo-router";
 import { format } from "date-fns";
 import RequestForm from "@/components/request_form";
+import ConsentScreen from "@/components/ConsentScreen";
 import { API_CONFIG } from "@/lib/config";
 import { apiFetch } from "@/lib/api";
+import { stopBackgroundTracking } from "@/lib/presence";
 import { AppContext } from "@/context/AppContext";
 
 interface AttendanceRecord {
@@ -36,7 +40,7 @@ const UserDashboard = () => {
   if (!context) {
     throw new Error('UserDashboard must be used within an AppProvider');
   }
-  const { handleLogout } = context;
+  const { handleLogout, setConsentRequired, refreshStatus } = context;
   const [name, setName] = useState("");
   const [attendanceData, setAttendanceData] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -46,9 +50,59 @@ const UserDashboard = () => {
     daysPresent: 0,
   });
   const [isModalVisible, setIsModalVisible] = useState(false);
+  const [isNoticeVisible, setIsNoticeVisible] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const handleFormSubmit = () => {
     setIsModalVisible(false);
+  };
+
+  /** Right of access: saves the user's data as JSON in the app's documents folder. */
+  const downloadMyData = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const data = await apiFetch(API_CONFIG.ENDPOINTS.MY_EXPORT);
+      const directory = FileSystem.documentDirectory;
+      if (!directory) throw new Error("No documents folder on this device");
+      const stamp = new Date().toISOString().slice(0, 10);
+      const uri = `${directory}attendify-my-data-${stamp}.json`;
+      await FileSystem.writeAsStringAsync(uri, JSON.stringify(data, null, 2));
+      Alert.alert("Your data was saved", `The file was saved to:\n${uri}`);
+    } catch (error) {
+      console.warn("Data export failed", error);
+      Alert.alert("Error", "Could not download your data. Please try again.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  /** Withdrawing clears consent on the server, stops background tracking and reopens the notice. */
+  const withdrawConsent = () => {
+    Alert.alert(
+      "Withdraw consent",
+      "Attendify will stop collecting your location and attendance data. If you are checked in, you will be checked out. " +
+        "You will need to accept the privacy notice again to use the app.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Withdraw",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await apiFetch(API_CONFIG.ENDPOINTS.CONSENT_WITHDRAW, { method: "POST" });
+            } catch (error) {
+              console.warn("Consent withdrawal failed", error);
+              Alert.alert("Error", "Could not withdraw consent. Check your connection and try again.");
+              return;
+            }
+            await stopBackgroundTracking();
+            await refreshStatus();
+            setConsentRequired(true);
+          },
+        },
+      ]
+    );
   };
 
   useEffect(() => {
@@ -222,6 +276,23 @@ const UserDashboard = () => {
           </Text>
         )}
       </View>
+
+      <View style={styles.privacySection}>
+        <Text style={styles.listTitle}>Privacy</Text>
+        <TouchableOpacity style={styles.privacyRow} onPress={() => setIsNoticeVisible(true)}>
+          <Text style={styles.privacyText}>View privacy notice</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.privacyRow} onPress={downloadMyData} disabled={exporting}>
+          <Text style={styles.privacyText}>{exporting ? "Preparing your data..." : "Download my data"}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.privacyRow} onPress={withdrawConsent}>
+          <Text style={[styles.privacyText, styles.privacyDanger]}>Withdraw consent</Text>
+        </TouchableOpacity>
+      </View>
+
+      <Modal visible={isNoticeVisible} animationType="slide" onRequestClose={() => setIsNoticeVisible(false)}>
+        <ConsentScreen readOnly onClose={() => setIsNoticeVisible(false)} />
+      </Modal>
     </ScrollView>
   );
 };
@@ -370,6 +441,24 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#442c91",
     marginBottom: 5,
+  },
+  privacySection: {
+    marginBottom: 30,
+  },
+  privacyRow: {
+    backgroundColor: "#fdf9ff",
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 5,
+    marginBottom: 10,
+  },
+  privacyText: {
+    fontSize: 16,
+    color: "#442c91",
+    fontWeight: "bold",
+  },
+  privacyDanger: {
+    color: "#e63946",
   },
 });
 

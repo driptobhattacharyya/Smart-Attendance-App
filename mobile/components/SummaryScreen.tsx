@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useContext, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Image, Alert } from 'react-native';
 import { API_CONFIG } from "@/lib/config";
 import { apiFetch, saveSession } from '@/lib/api';
+import { AppContext } from '@/context/AppContext';
 
 interface SummaryScreenProps {
   formData: any;
@@ -12,6 +13,7 @@ interface SummaryScreenProps {
 
 const SummaryScreen = ({ formData, onSubmit, isSignup = false, loading = false }: SummaryScreenProps) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { setConsentRequired } = useContext(AppContext);
 
   // Kept between attempts so a failed face upload can be retried
   // without creating the account twice.
@@ -36,18 +38,24 @@ const SummaryScreen = ({ formData, onSubmit, isSignup = false, loading = false }
         setAuth(session);
       }
 
-      const faceFormData = new FormData();
-      faceFormData.append('image', {
-        uri: formData.photo.uri,
-        name: 'face.jpg',
-        type: 'image/jpeg',
-      } as any);
-      await apiFetch(API_CONFIG.ENDPOINTS.REGISTER_FACE, {
-        form: faceFormData,
-        token: session.access_token,
-      });
+      // The API refuses face enrolment until the privacy notice is accepted, so a new
+      // account with consent still pending skips the upload and goes to the consent screen.
+      const consentPending = Boolean(session.consent_required);
+      if (!consentPending) {
+        const faceFormData = new FormData();
+        faceFormData.append('image', {
+          uri: formData.photo.uri,
+          name: 'face.jpg',
+          type: 'image/jpeg',
+        } as any);
+        await apiFetch(API_CONFIG.ENDPOINTS.REGISTER_FACE, {
+          form: faceFormData,
+          token: session.access_token,
+        });
+      }
 
-      await saveSession({ ...session, face_enrolled: true });
+      await saveSession({ ...session, face_enrolled: !consentPending });
+      setConsentRequired(consentPending);
       Alert.alert(
         'Welcome!',
         `Your account is ready. Your employee ID is ${session.employee_id}.`

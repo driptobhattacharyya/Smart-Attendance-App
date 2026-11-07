@@ -7,7 +7,8 @@ import "react-native-reanimated";
 // Registers the background presence task (must run at startup, before any component mounts).
 import "@/lib/presence";
 import { AppContext, AppProvider } from "@/context/AppContext";
-import { ApiError, apiFetch, clearSession, TOKEN_KEY } from "@/lib/api";
+import ConsentScreen from "@/components/ConsentScreen";
+import { ApiError, apiFetch, clearSession, loadStoredConsentRequired, TOKEN_KEY } from "@/lib/api";
 import { API_CONFIG } from "@/lib/config";
 import * as SecureStore from "expo-secure-store";
 import { useColorScheme } from "@/hooks/useColorScheme";
@@ -27,7 +28,7 @@ function RootLayoutContent() {
   if (!context) {
     throw new Error('RootLayoutContent must be used within an AppProvider');
   }
-  const { isLoggedIn, setIsLoggedIn } = context;
+  const { isLoggedIn, setIsLoggedIn, consentRequired, setConsentRequired } = context;
   const router = useRouter();
 
   const checkLoginStatus = async () => {
@@ -38,14 +39,16 @@ function RootLayoutContent() {
         return;
       }
       // Make sure the saved token is still valid (it expires after a while).
-      await apiFetch(API_CONFIG.ENDPOINTS.ME);
+      const me = await apiFetch(API_CONFIG.ENDPOINTS.ME);
+      setConsentRequired(Boolean(me?.consent_required));
       setIsLoggedIn(true);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         await clearSession();
         setIsLoggedIn(false);
       } else {
-        // Offline: keep the user signed in; requests will retry later.
+        // Offline: keep the user signed in; requests will retry later. Use the last known consent state.
+        setConsentRequired(await loadStoredConsentRequired());
         setIsLoggedIn(!!(await SecureStore.getItemAsync(TOKEN_KEY)));
       }
     }
@@ -60,6 +63,17 @@ function RootLayoutContent() {
 
   if (!loaded) {
     return null;
+  }
+
+  // Consent comes before anything else for a logged-in user: the tabs (and so the location
+  // watcher), the permission gate and Bluetooth stay unmounted until the notice is accepted.
+  if (isLoggedIn && consentRequired) {
+    return (
+      <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+        <ConsentScreen />
+        <StatusBar style="auto" />
+      </ThemeProvider>
+    );
   }
 
   return (

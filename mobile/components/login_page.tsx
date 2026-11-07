@@ -21,7 +21,7 @@ export default function LoginPage({ onSignupPress }: LoginPageProps) {
     throw new Error('LoginPage must be used within an AppProvider');
   }
 
-  const { setIsLoggedIn } = context;
+  const { setIsLoggedIn, setConsentRequired } = context;
 
   const handleLogin = async () => {
     if (!username || !password) {
@@ -40,6 +40,7 @@ export default function LoginPage({ onSignupPress }: LoginPageProps) {
         return;
       }
       await saveSession(data);
+      setConsentRequired(Boolean(data.consent_required));
       setIsLoggedIn(true);
       router.replace("/(tabs)/user_dashboard");
     } catch (error: any) {
