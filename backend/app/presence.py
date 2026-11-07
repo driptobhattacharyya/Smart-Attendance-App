@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid as uuidlib
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, time
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
@@ -56,6 +57,104 @@ def best_rssi(
 
 def is_near(best: int | None, min_rssi: int) -> bool:
     return best is not None and best >= min_rssi
+
+
+PresenceReason = Literal[
+    "near", "no_signal", "weak_signal", "desk_locked", "desk_idle", "desk_offline", "outside"
+]
+
+# Higher = more informative when several desk computers block the same reading set.
+_DESK_REASON_RANK = {"desk_offline": 0, "desk_idle": 1, "desk_locked": 2}
+
+
+def desk_block_reason(
+    beacon: Mapping[str, Any],
+    now: datetime,
+    grace_seconds: float,
+    idle_limit_seconds: float,
+) -> str | None:
+    """Why a ``desk_app`` beacon does not currently count as "the employee is at the desk".
+
+    ``None`` for tags and for desk computers that are online, unlocked and not idle too long.
+    """
+    if beacon.get("kind", "tag") != "desk_app":
+        return None
+    device = beacon.get("device") or {}
+    last_seen = device.get("last_seen_at")
+    if not beacon.get("device_token_hash") or not last_seen:
+        return "desk_offline"
+    if (as_utc(now) - as_utc(last_seen)).total_seconds() > grace_seconds:
+        return "desk_offline"
+    if device.get("locked"):
+        return "desk_locked"
+    if int(device.get("idle_seconds") or 0) > idle_limit_seconds:
+        return "desk_idle"
+    return None
+
+
+@dataclass(frozen=True)
+class SignalResult:
+    best_rssi: int | None  # strongest matching reading, whether or not it counts
+    near: bool
+    reason: str  # one of PresenceReason except "outside"
+
+
+def evaluate_signal(
+    readings: Iterable[Mapping[str, Any]],
+    beacons: Iterable[Mapping[str, Any]],
+    min_rssi: int,
+    now: datetime,
+    *,
+    require_desk_activity: bool = True,
+    desk_grace_seconds: float = 180,
+    desk_idle_limit_seconds: float = 600,
+) -> SignalResult:
+    """Is the phone near the employee's beacon, and if not, why not? Pure.
+
+    A reading counts only if it matches a beacon and, for a ``desk_app`` beacon (when
+    ``require_desk_activity``), that desk computer is online, unlocked and not idle too long.
+    """
+    beacons = list(beacons)
+    counted: list[int] = []
+    blocked: list[tuple[int, str]] = []  # (rssi, desk reason) of strong-enough blocked readings
+    all_matching: list[int] = []
+    for r in readings:
+        matched = [b for b in beacons if reading_matches(r, b)]
+        if not matched:
+            continue
+        rssi = r["rssi"]
+        all_matching.append(rssi)
+        reasons = [
+            desk_block_reason(b, now, desk_grace_seconds, desk_idle_limit_seconds)
+            if require_desk_activity
+            else None
+            for b in matched
+        ]
+        if any(reason is None for reason in reasons):
+            counted.append(rssi)
+        elif rssi >= min_rssi:
+            blocked.append((rssi, max(reasons, key=lambda x: _DESK_REASON_RANK[x or ""])))
+    best = max(all_matching) if all_matching else None
+    if counted and max(counted) >= min_rssi:
+        return SignalResult(best, True, "near")
+    if blocked:
+        strongest = max(blocked, key=lambda b: b[0])
+        return SignalResult(best, False, strongest[1])
+    return SignalResult(best, False, "weak_signal" if all_matching else "no_signal")
+
+
+def presence_reason(
+    inside: bool, signal: SignalResult, require_bluetooth: bool
+) -> PresenceReason | None:
+    """The ``reason`` stored in a presence-log entry. ``None`` when beacons are not required and
+    the phone is simply inside (nothing to explain)."""
+    if not inside:
+        return "outside"
+    if signal.near:
+        return "near"
+    if not require_bluetooth:
+        return None
+    return signal.reason  # type: ignore[return-value]
 
 
 def decide_state(inside: bool, near: bool, require_bluetooth: bool) -> PresenceStateName:
@@ -181,6 +280,12 @@ def is_late(first_check_in: datetime, work_start: str, tz: ZoneInfo) -> bool:
     09:30:40 is not late for a 09:30 start but 09:31 is."""
     local = as_utc(first_check_in).astimezone(tz)
     return local.time().replace(second=0, microsecond=0) > time.fromisoformat(work_start)
+
+
+def last_reason(session: Mapping[str, Any]) -> str | None:
+    """``reason`` of the newest presence-log entry (None if there is none or it has no reason)."""
+    log: Sequence[Mapping[str, Any]] = session.get("presence_log") or []
+    return log[-1].get("reason") if log else None
 
 
 def last_heartbeat_rssi(session: Mapping[str, Any]) -> int | None:

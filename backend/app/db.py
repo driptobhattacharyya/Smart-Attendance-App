@@ -25,6 +25,15 @@ async def ensure_indexes(db: Database) -> None:
     await db.attendance_sessions.create_index("date")
     await db.beacons.create_index("office_id")
     await db.beacons.create_index("assigned_employee_id")
+    await db.beacons.create_index("device_token_hash", sparse=True)
+    await db.beacons.create_index("pairing.code_hash", sparse=True)
+    # A desk app is identified by (uuid, major, minor); two must never share it.
+    await db.beacons.create_index(
+        [("uuid", ASCENDING), ("major", ASCENDING), ("minor", ASCENDING)],
+        unique=True,
+        partialFilterExpression={"kind": "desk_app"},
+        name="desk_app_identity",
+    )
 
 
 async def next_employee_id(db: Database) -> str:

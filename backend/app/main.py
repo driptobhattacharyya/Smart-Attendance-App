@@ -15,6 +15,7 @@ from .routers import (
     auth,
     beacons,
     consent,
+    desk,
     face,
     manager,
     offices,
@@ -87,7 +88,8 @@ def create_app(settings: Settings | None = None, *, db=None, face_provider=None)
     async def health():
         return {"status": "ok", "face_recognition": app.state.face_provider is not None}
 
-    for module in (auth, consent, offices, beacons, face, attendance, requests, manager, admin):
+    modules = (auth, consent, offices, beacons, desk, face, attendance, requests, manager, admin)
+    for module in modules:
         app.include_router(module.router, prefix="/api")
     return app
 

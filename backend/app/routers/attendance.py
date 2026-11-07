@@ -8,9 +8,9 @@ from ..geo import haversine_m
 from ..presence import (
     SessionClosedError,
     apply_presence,
-    best_rssi,
     decide_state,
-    is_near,
+    evaluate_signal,
+    presence_reason,
 )
 from ..retention import maybe_prune
 from ..schemas import (
@@ -35,6 +35,28 @@ from ..services import (
 )
 
 router = APIRouter(prefix="/attendance", tags=["attendance"])
+
+CHECK_IN_BLOCKED = {
+    "no_signal": "Your desk beacon is not nearby",
+    "weak_signal": "Beacon signal too weak",
+    "desk_locked": "Your desk computer is locked; unlock it to check in",
+    "desk_idle": "Your desk computer has been idle for too long; use it, then try again",
+    "desk_offline": (
+        "Your desk computer is not reporting in; check that Attendify Desk is running on it"
+    ),
+}
+
+
+def _signal(readings, beacons, settings: Settings, now):
+    return evaluate_signal(
+        readings,
+        beacons,
+        settings.bluetooth_min_rssi,
+        now,
+        require_desk_activity=settings.require_desk_activity,
+        desk_grace_seconds=settings.desk_heartbeat_grace_seconds,
+        desk_idle_limit_seconds=settings.desk_idle_limit_seconds,
+    )
 
 
 async def _open_session(db: Database, employee_id: str) -> dict | None:
@@ -103,17 +125,15 @@ async def check_in(
 
     readings = [r.model_dump() for r in data.beacons]
     mine = await beacons_for_user(db, user)
-    best = best_rssi(readings, mine)
+    signal = _signal(readings, mine, settings, now)
+    best = signal.best_rssi
     if settings.require_bluetooth:
         if not mine:
             raise HTTPException(
                 status.HTTP_409_CONFLICT, "No beacon configured for you; ask your admin"
             )
-        if not is_near(best, settings.bluetooth_min_rssi):
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN,
-                "Your desk beacon is not nearby" if best is None else "Beacon signal too weak",
-            )
+        if not signal.near:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, CHECK_IN_BLOCKED[signal.reason])
 
     if await _open_session(db, user["employee_id"]):
         raise HTTPException(status.HTTP_409_CONFLICT, "You are already checked in")
@@ -170,9 +190,10 @@ async def heartbeat(
     distance = haversine_m(data.latitude, data.longitude, office["latitude"], office["longitude"])
     inside = distance <= office["radius"]
     readings = [r.model_dump() for r in data.beacons]
-    best = best_rssi(readings, await beacons_for_user(db, user))
-    near = is_near(best, settings.bluetooth_min_rssi)
-    state = decide_state(inside, near, settings.require_bluetooth)
+    signal = _signal(readings, await beacons_for_user(db, user), settings, now)
+    best = signal.best_rssi
+    state = decide_state(inside, signal.near, settings.require_bluetooth)
+    reason = presence_reason(inside, signal, settings.require_bluetooth)
 
     try:
         updated = await apply_presence(
@@ -186,6 +207,7 @@ async def heartbeat(
                 "state": state,
                 "distance_m": round(distance, 1),
                 "best_rssi": best,
+                "reason": reason,
             },
             end=state == "outside",
         )
@@ -196,6 +218,7 @@ async def heartbeat(
         checked_in=updated.get("ended_at") is None,
         session=session_out(updated, now, settings),
         next_heartbeat_seconds=settings.heartbeat_interval_seconds,
+        reason=reason,
     )
 
 

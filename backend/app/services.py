@@ -11,13 +11,14 @@ from bson.errors import InvalidId
 from fastapi import HTTPException, status
 
 from .config import Settings
-from .db import Database, as_utc
+from .db import Database, as_utc, utcnow
 from .presence import worked_seconds
 from .schemas import (
     DEFAULT_WORK_START,
     AttendanceReport,
     BeaconOut,
     DaySummary,
+    DeviceOut,
     Office,
     RequestOut,
     SessionOut,
@@ -73,7 +74,16 @@ def user_out(doc: dict, settings: Settings) -> UserOut:
     )
 
 
-def beacon_out(doc: dict) -> BeaconOut:
+def beacon_out(doc: dict, settings: Settings, now: datetime | None = None) -> BeaconOut:
+    """Never exposes ``device_token_hash`` or ``pairing``."""
+    grace = settings.desk_heartbeat_grace_seconds
+    device = doc.get("device") or None
+    last_seen = device.get("last_seen_at") if device else None
+    online = bool(
+        doc.get("device_token_hash")
+        and last_seen
+        and ((now or utcnow()) - as_utc(last_seen)).total_seconds() <= grace
+    )
     return BeaconOut(
         id=str(doc["_id"]),
         office_id=doc["office_id"],
@@ -83,6 +93,25 @@ def beacon_out(doc: dict) -> BeaconOut:
         minor=doc.get("minor"),
         assigned_employee_id=doc.get("assigned_employee_id"),
         active=doc.get("active", True),
+        kind=doc.get("kind", "tag"),
+        device=_device_out(device),
+        paired=bool(doc.get("device_token_hash")),
+        online=online,
+    )
+
+
+def _device_out(device: dict | None) -> DeviceOut | None:
+    if not device:
+        return None
+    return DeviceOut(
+        hostname=device.get("hostname"),
+        os=device.get("os"),
+        agent_version=device.get("agent_version"),
+        paired_at=as_utc(device["paired_at"]) if device.get("paired_at") else None,
+        last_seen_at=as_utc(device["last_seen_at"]) if device.get("last_seen_at") else None,
+        locked=device.get("locked"),
+        idle_seconds=device.get("idle_seconds"),
+        advertising=device.get("advertising"),
     )
 
 

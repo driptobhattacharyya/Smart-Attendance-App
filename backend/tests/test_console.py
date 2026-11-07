@@ -301,7 +301,7 @@ def test_presence_board_rows_and_order(client, board, now):
     assert ananya["today_minutes"] == 62
     assert set(ananya) == {
         "employee_id", "name", "office_id", "status", "checked_in", "session_id", "since",
-        "last_heartbeat_at", "best_rssi", "today_minutes", "face_enrolled", "has_beacon",
+        "last_heartbeat_at", "best_rssi", "reason", "today_minutes", "face_enrolled", "has_beacon",
     }  # fmt: skip
 
     chitra = by_name["Chitra"]
