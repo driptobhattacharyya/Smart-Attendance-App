@@ -1,14 +1,11 @@
-import {
-  DarkTheme,
-  DefaultTheme,
-  ThemeProvider,
-} from "@react-navigation/native";
 import { useFonts } from "expo-font";
-import { Stack } from "expo-router";
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useContext } from "react";
 import "react-native-reanimated";
+// Registers the background presence task (must run at startup, before any component mounts).
+import "@/lib/presence";
 import { AppContext, AppProvider } from "@/context/AppContext";
 import { ApiError, apiFetch, clearSession, TOKEN_KEY } from "@/lib/api";
 import { API_CONFIG } from "@/lib/config";
@@ -78,18 +75,6 @@ function RootLayoutContent() {
           // App screens
           <>
             <Stack.Screen name="(tabs)" />
-            <Stack.Screen
-              name="bluetooth_services"
-              options={{ headerShown: true, title: "Bluetooth Services" }}
-            />
-            <Stack.Screen
-              name="location_services"
-              options={{ headerShown: true, title: "Location Services" }}
-            />
-            <Stack.Screen
-              name="user_dashboard"
-              options={{ headerShown: true, title: "Dashboard" }}
-            />
             <Stack.Screen name="+not-found" />
           </>
         )}

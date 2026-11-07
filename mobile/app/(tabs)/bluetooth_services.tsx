@@ -1,202 +1,99 @@
-import React, { useState, useEffect, useContext } from "react";
-import {
-  View,
-  Text,
-  FlatList,
-  StyleSheet,
-  TouchableOpacity,
-  Platform,
-  StatusBar,
-  PermissionsAndroid,
-  Alert,
-} from "react-native";
+import React, { useContext, useState } from "react";
+import { View, Text, FlatList, StyleSheet, TouchableOpacity, Platform, StatusBar } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { BleManager, Device } from "react-native-ble-plx";
-import { AppContext } from "@/context/AppContext";
-import * as SecureStore from "expo-secure-store";
+import { AppContext, BleStatus } from "@/context/AppContext";
+import { Beacon, beaconStatus, BeaconStatus, DEFAULT_MIN_RSSI, latestForBeacon } from "@/lib/beacons";
+
+const STATUS_STYLE: Record<BeaconStatus, { label: string; color: string; background: string }> = {
+  near: { label: "Near", color: "#1B7F3B", background: "#DDF5E4" },
+  far: { label: "Far", color: "#9A6200", background: "#FFF0CF" },
+  "not seen": { label: "Not seen", color: "#6B6B7B", background: "#ECECF1" },
+};
+
+const BLE_MESSAGE: Partial<Record<BleStatus, string>> = {
+  "no-permission": "Bluetooth permission is needed to look for your beacon.",
+  "bluetooth-off": "Bluetooth is turned off. Turn it on, then tap Retry.",
+  error: "Scanning failed.",
+  idle: "Scanning has not started.",
+};
+
+const describeBeacon = (b: Beacon) =>
+  `${b.uuid}${b.major !== null ? `  major ${b.major}` : "  any major"}${b.minor !== null ? `  minor ${b.minor}` : "  any minor"}`;
 
 const BluetoothScanner = () => {
-  const [bleManager] = useState(new BleManager());
-  const [devices, setDevices] = useState([]);
+  const { beacons, sightings, bleStatus, bleError, enableScanning } = useContext(AppContext);
   const [showInfo, setShowInfo] = useState(false);
-  const { isInBluetoothRange, setIsInBluetoothRange, setBluetoothRssi } = useContext(AppContext);
-  const [lastMessage, setLastMessage] = useState("");
-  const [targetDeviceID, setTargetDeviceID] = useState<string | null>(null);
+  const now = Date.now();
 
-  // Load target device ID from SecureStore
-  useEffect(() => {
-    const loadTargetDevice = async () => {
-      try {
-        const savedDeviceId = await SecureStore.getItemAsync('bluetooth_device_id');
-        console.log("Saved device ID:", savedDeviceId);
-        if (savedDeviceId) {
-          setTargetDeviceID(savedDeviceId);
-        } else {
-          console.log('No saved Bluetooth device ID found');
-        }
-      } catch (error) {
-        console.error('Error loading Bluetooth device ID:', error);
-      }
-      console.log("Target device ID:", targetDeviceID);
-    };
+  const rows = beacons.map((beacon) => {
+    const sighting = latestForBeacon(beacon, sightings, now);
+    return { beacon, sighting, status: beaconStatus(sighting) };
+  });
 
-    loadTargetDevice();
-  }, []);
+  const problem = bleStatus !== "scanning" && beacons.length > 0 ? BLE_MESSAGE[bleStatus] : null;
 
-  useEffect(() => {
-    const startScan = async () => {
-      // Request permissions on Android
-      if (Platform.OS === "android") {
-        const granted = await PermissionsAndroid.requestMultiple([
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-        ]);
-
-        if (
-          granted["android.permission.ACCESS_FINE_LOCATION"] !== "granted" ||
-          granted["android.permission.BLUETOOTH_SCAN"] !== "granted"
-        ) {
-          Alert.alert("Permissions not granted!");
-          return;
-        }
-      }
-
-      // Start scanning for devices
-      bleManager.startDeviceScan(null, null, (error, scannedDevice) => {
-        if (error) {
-          console.log("Error during scan:", error);
-          return;
-        }
-
-        if (scannedDevice && scannedDevice.rssi) {
-          setDevices((prevDevices) => {
-            const currentTime = Date.now();
-
-            // Check if the device already exists in the list
-            const existingDevice = prevDevices.find((d) => d.id === scannedDevice.id);
-
-            if (existingDevice) {
-              // Update RSSI and lastSeen timestamp for existing device
-              return prevDevices.map((d) =>
-                d.id === scannedDevice.id
-                  ? { ...d, rssi: scannedDevice.rssi, lastSeen: currentTime }
-                  : d
-              );
-            } else {
-              // Add new device to the list with lastSeen timestamp
-              return [
-                ...prevDevices,
-                { ...scannedDevice, lastSeen: currentTime },
-              ];
-            }
-          });
-        }
-      });
-    };
-
-    // Start the scan and repeat every few seconds
-    const intervalId = setInterval(() => {
-      startScan();
-    }, 15000);
-    
-    // Cleanup on component unmount
-    return () => {
-      bleManager.stopDeviceScan();
-      bleManager.destroy();
-      clearInterval(intervalId);
-    };
-  }, [bleManager]);
-
-  // Remove stale devices
-  useEffect(() => {
-    const cleanupStaleDevices = () => {
-      const currentTime = Date.now();
-      const staleThreshold = 10000; // 10 seconds
-
-      setDevices((prevDevices) =>
-        prevDevices.filter((d) => currentTime - d.lastSeen <= staleThreshold)
-      );
-    };
-
-    const cleanupInterval = setInterval(cleanupStaleDevices, 5000); // Check every 5 seconds
-
-    return () => clearInterval(cleanupInterval);
-  }, []);
-
-  // Monitor target device proximity
-  useEffect(() => {
-    if (!targetDeviceID) return; // Don't check if no target device is set
-
-    const targetDevice = devices.find((d) => d.id === targetDeviceID);
-    
-    setBluetoothRssi(targetDevice?.rssi ?? null);
-    if (targetDevice && targetDevice.rssi > -70) {
-      // Device detected nearby
-      if (!isInBluetoothRange) {
-        setIsInBluetoothRange(true); // Update state to detected
-        setLastMessage("Target device detected nearby."); // Update the message
-        console.log("Target device detected nearby."); // For debugging
-      }
-    } else {
-      // Device not detected or far away
-      if (isInBluetoothRange) {
-        setIsInBluetoothRange(false); // Update state to not detected
-        setLastMessage("Target device not detected."); // Update the message
-        console.log("Target device not detected."); // For debugging
-      }
-    }
-  }, [devices, isInBluetoothRange, targetDeviceID, setBluetoothRssi]);
-  
   return (
     <View style={styles.container}>
-      {/* Title with Info Icon */}
       <View style={styles.titleContainer}>
-        <Text style={styles.title}>Nearby Bluetooth Devices</Text>
-        <TouchableOpacity onPress={() => setShowInfo(!showInfo)}>
+        <Text style={styles.title}>Your beacons</Text>
+        <TouchableOpacity onPress={() => setShowInfo(!showInfo)} accessibilityLabel="About beacons">
           <Ionicons name="information-circle" size={24} color="#6A5ACD" />
         </TouchableOpacity>
       </View>
 
-      {/* Info Explanation */}
       {showInfo && (
         <View style={styles.infoBox}>
           <Text style={styles.infoText}>
-            RSSI indicates the signal strength from the device. Closer to 0 means the device is
-            very close. An RSSI of -70 or better is required for attendance.
+            Your admin placed a Bluetooth beacon at your desk. Your time only counts as "at your desk" while the
+            phone hears it with a signal of {DEFAULT_MIN_RSSI} dBm or better (closer to 0 is stronger).
+            {Platform.OS === "ios"
+              ? "\n\nOn iPhone, background Bluetooth scanning is limited by iOS, so beacons may only be detected while the app is open."
+              : ""}
           </Text>
         </View>
       )}
 
-      {/* Device List */}
+      {problem && (
+        <View style={styles.warningBox}>
+          <Text style={styles.warningText}>
+            {problem}
+            {bleStatus === "error" && bleError ? ` ${bleError}` : ""}
+          </Text>
+          <TouchableOpacity style={styles.retryButton} onPress={enableScanning}>
+            <Text style={styles.retryText}>{bleStatus === "no-permission" ? "Allow Bluetooth" : "Retry"}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       <FlatList
-        data={devices}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <View
-            style={[
-              styles.deviceContainer,
-              item.id === targetDeviceID && styles.targetDeviceContainer,
-            ]}
-          >
-            <Text
-              style={[
-                styles.deviceName,
-                item.id === targetDeviceID && styles.targetDeviceName,
-              ]}
-            >
-              {item.name || "Unnamed Device"}
-            </Text>
-            <Text
-              style={[
-                styles.deviceRSSI,
-                item.id === targetDeviceID && styles.targetDeviceRSSI,
-              ]}
-            >
-              RSSI: {item.rssi}
-            </Text>
-          </View>
-        )}
+        data={rows}
+        keyExtractor={(item) => item.beacon.id}
+        ListEmptyComponent={
+          <Text style={styles.emptyText}>
+            No beacon is assigned to you yet. Ask your admin to assign one to you or your office.
+          </Text>
+        }
+        renderItem={({ item }) => {
+          const style = STATUS_STYLE[item.status];
+          return (
+            <View style={styles.beaconContainer}>
+              <View style={styles.beaconInfo}>
+                <Text style={styles.beaconName}>{item.beacon.name}</Text>
+                <Text style={styles.beaconId} numberOfLines={2}>
+                  {describeBeacon(item.beacon)}
+                </Text>
+                <Text style={styles.beaconRssi}>
+                  {item.sighting
+                    ? `RSSI ${item.sighting.rssi} dBm, ${Math.max(0, Math.round((now - item.sighting.seenAt) / 1000))}s ago`
+                    : "No signal in the last 15 seconds"}
+                </Text>
+              </View>
+              <View style={[styles.badge, { backgroundColor: style.background }]}>
+                <Text style={[styles.badgeText, { color: style.color }]}>{style.label}</Text>
+              </View>
+            </View>
+          );
+        }}
       />
     </View>
   );
@@ -227,11 +124,40 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   infoText: {
-    color: "#6A5ACD",
+    color: "#4A3B94",
     fontSize: 14,
     lineHeight: 20,
   },
-  deviceContainer: {
+  warningBox: {
+    backgroundColor: "#FFF0CF",
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  warningText: {
+    color: "#6B4500",
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  retryButton: {
+    alignSelf: "flex-start",
+    marginTop: 8,
+    backgroundColor: "#6A5ACD",
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+  },
+  retryText: {
+    color: "#fff",
+    fontWeight: "600",
+  },
+  emptyText: {
+    color: "#4A3B94",
+    fontSize: 15,
+    textAlign: "center",
+    marginTop: 40,
+  },
+  beaconContainer: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
@@ -239,27 +165,34 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 8,
     marginBottom: 10,
+    gap: 12,
   },
-  targetDeviceContainer: {
-    backgroundColor: "#D1CFFF",
-    borderWidth: 1,
-    borderColor: "#6A5ACD",
+  beaconInfo: {
+    flex: 1,
   },
-  deviceName: {
+  beaconName: {
     fontSize: 16,
+    fontWeight: "bold",
     color: "#4A3B94",
   },
-  targetDeviceName: {
-    fontWeight: "bold",
+  beaconId: {
+    fontSize: 11,
     color: "#6A5ACD",
+    marginTop: 2,
   },
-  deviceRSSI: {
+  beaconRssi: {
     fontSize: 14,
     color: "#4A3B94",
+    marginTop: 4,
   },
-  targetDeviceRSSI: {
-    fontWeight: "bold",
-    color: "#6A5ACD",
+  badge: {
+    borderRadius: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+  },
+  badgeText: {
+    fontSize: 13,
+    fontWeight: "700",
   },
 });
 

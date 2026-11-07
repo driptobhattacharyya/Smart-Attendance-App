@@ -1,8 +1,9 @@
-import React, { useContext, useEffect, useState } from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
 import { Text, View, StyleSheet, FlatList } from "react-native";
 import { AppContext, Session } from "@/context/AppContext";
 import { apiFetch } from "@/lib/api";
 import { API_CONFIG } from "@/lib/config";
+import { PresenceState } from "@/lib/presence";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const todayLocal = () => {
@@ -13,32 +14,51 @@ const todayLocal = () => {
 const formatTime = (seconds: number) =>
   `${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`;
 
-/** Today's attendance as recorded by the server, ticking live while checked in. */
+const formatMinutes = (m: number) => `${Math.floor(m / 60)}h ${pad(m % 60)}m`;
+
+const CHIP: Record<PresenceState, { label: string; color: string; background: string }> = {
+  present: { label: "At your desk", color: "#1B7F3B", background: "#DDF5E4" },
+  away: { label: "Away from desk – time paused", color: "#9A6200", background: "#FFF0CF" },
+  outside: { label: "Outside office", color: "#B3261E", background: "#FADBD8" },
+};
+
+const sessionDetail = (s: Session) =>
+  s.source === "request"
+    ? `Approved request · ${formatMinutes(s.minutes)}`
+    : `Present ${formatMinutes(s.present_minutes ?? s.minutes)} · Away ${formatMinutes(s.away_minutes ?? 0)}`;
+
+/** Today's attendance as recorded by the server, ticking live while the phone is at the desk. */
 const Timer = () => {
-  const { isInsideGeofence, isCheckedIn, openSession, todayMinutes } = useContext(AppContext);
+  const { isInsideGeofence, isCheckedIn, openSession, todayMinutes, presence } = useContext(AppContext);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [now, setNow] = useState(Date.now());
+  // When the worked minutes were last confirmed by the server; the clock ticks on from there.
+  const syncedAt = useRef(Date.now());
 
-  // Reload today's sessions whenever the check-in state changes.
+  useEffect(() => {
+    syncedAt.current = Date.now();
+    setNow(Date.now());
+  }, [todayMinutes, presence, openSession?.id]);
+
+  // Reload today's sessions whenever the check-in state or worked time changes.
   useEffect(() => {
     const today = todayLocal();
     apiFetch(`${API_CONFIG.ENDPOINTS.GET_ATTENDANCE}?start=${today}&end=${today}`)
       .then((report) => setSessions(report.days[0]?.sessions ?? []))
       .catch((error) => console.warn("Could not load today's sessions", error));
-  }, [openSession?.id, todayMinutes]);
+  }, [openSession?.id, todayMinutes, presence]);
 
+  // Only the time at the desk counts, so the clock pauses while away or outside.
+  const ticking = isCheckedIn && (presence === "present" || presence === null);
   useEffect(() => {
-    if (!isCheckedIn) return;
+    if (!ticking) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [isCheckedIn]);
+  }, [ticking]);
 
-  const totalSeconds = sessions.reduce((sum, s) => {
-    if (s.ended_at) return sum + s.minutes * 60;
-    return sum + Math.max(0, Math.floor((now - new Date(s.started_at).getTime()) / 1000));
-  }, 0);
+  const totalSeconds = todayMinutes * 60 + (ticking ? Math.max(0, Math.floor((now - syncedAt.current) / 1000)) : 0);
 
-  if (!sessions.length) {
+  if (!sessions.length && !isCheckedIn) {
     return (
       <View style={styles.emptyContainer}>
         <Text style={styles.motivationText}>
@@ -50,21 +70,30 @@ const Timer = () => {
     );
   }
 
+  const chip = isCheckedIn && presence ? CHIP[presence] : null;
+
   return (
     <View style={styles.container}>
       <View style={styles.timerCircle}>
         <Text style={styles.timerText}>{formatTime(totalSeconds)}</Text>
+        <Text style={styles.timerCaption}>worked today</Text>
       </View>
 
-      <Text style={styles.statusText}>
-        {isCheckedIn
-          ? "Checked in. Timer is running..."
-          : `Checked out.\n${
-              isInsideGeofence
-                ? "Scan your face to check back in."
-                : "You are outside the office area."
-            }`}
-      </Text>
+      {chip ? (
+        <View style={[styles.chip, { backgroundColor: chip.background }]}>
+          <Text style={[styles.chipText, { color: chip.color }]}>{chip.label}</Text>
+        </View>
+      ) : (
+        <Text style={styles.statusText}>
+          {isCheckedIn
+            ? "Checked in. Timer is running..."
+            : `Checked out.\n${
+                isInsideGeofence
+                  ? "Scan your face to check back in."
+                  : "You are outside the office area."
+              }`}
+        </Text>
+      )}
 
       <View style={styles.tableContainer}>
         <Text style={styles.tableHeader}>Today's sessions</Text>
@@ -74,11 +103,10 @@ const Timer = () => {
           renderItem={({ item }) => (
             <View style={styles.tableRow}>
               <Text style={styles.tableCell}>
-                In: {new Date(item.started_at).toLocaleTimeString()}
+                {new Date(item.started_at).toLocaleTimeString()} {"→"}{" "}
+                {item.ended_at ? new Date(item.ended_at).toLocaleTimeString() : "Ongoing"}
               </Text>
-              <Text style={styles.tableCell}>
-                Out: {item.ended_at ? new Date(item.ended_at).toLocaleTimeString() : "Ongoing"}
-              </Text>
+              <Text style={styles.tableSub}>{sessionDetail(item)}</Text>
             </View>
           )}
         />
@@ -114,6 +142,21 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#5B3B8E", // Dark purple text
   },
+  timerCaption: {
+    fontSize: 14,
+    color: "#5B3B8E",
+    marginTop: 4,
+  },
+  chip: {
+    borderRadius: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 18,
+    marginBottom: 20,
+  },
+  chipText: {
+    fontSize: 16,
+    fontWeight: "700",
+  },
   statusText: {
     fontSize: 18,
     color: "#6A4CAF",
@@ -131,8 +174,6 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   tableRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
     paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: "#D9C2F0",
@@ -140,6 +181,11 @@ const styles = StyleSheet.create({
   tableCell: {
     fontSize: 16,
     color: "#333",
+  },
+  tableSub: {
+    fontSize: 13,
+    color: "#6A4CAF",
+    marginTop: 2,
   },
   emptyContainer: {
     flex: 1,

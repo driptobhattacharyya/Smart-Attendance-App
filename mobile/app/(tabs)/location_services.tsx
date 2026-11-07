@@ -17,7 +17,7 @@ import * as SecureStore from "expo-secure-store";
 import { AppContext } from "@/context/AppContext";
 
 export default function LocationServices() {
-  const { handleEntry, handleExit } = useContext(AppContext);
+  const { handleEntry, handleExit, locationPermissions } = useContext(AppContext);
   const [locationPermission, setLocationPermission] = useState(false);
   const [officeLocation, setOfficeLocation] = useState({
     latitude: 0,
@@ -58,6 +58,8 @@ export default function LocationServices() {
   // Watch the phone's position and tell the app when we cross the office boundary.
   // The server re-checks the distance on check-in, so this only decides *when* to ask.
   useEffect(() => {
+    // Permission is requested (with an explanation) by PermissionGate on the Home tab.
+    if (!locationPermissions.foreground) return;
     if (!officeLocation.latitude || !officeLocation.longitude || !officeLocation.radius) {
       return;
     }
@@ -66,11 +68,7 @@ export default function LocationServices() {
     let cancelled = false;
 
     (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted" || cancelled) {
-        console.log("Permission to access location was denied");
-        return;
-      }
+      if (cancelled) return;
       setLocationPermission(true);
       subscription = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 5 },
@@ -100,7 +98,7 @@ export default function LocationServices() {
       cancelled = true;
       subscription?.remove();
     };
-  }, [officeLocation, handleEntry, handleExit]);
+  }, [officeLocation, locationPermissions.foreground, handleEntry, handleExit]);
   
   const mapRef = useRef<MapView>(null);
   const navigation = useNavigation();

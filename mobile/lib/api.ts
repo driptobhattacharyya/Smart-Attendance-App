@@ -3,6 +3,19 @@ import { API_CONFIG } from "./config";
 
 export const TOKEN_KEY = "access_token";
 
+/** Values the background task reads (it runs without React state). */
+export const BEACONS_KEY = "my_beacons";
+export const HEARTBEAT_INTERVAL_KEY = "heartbeat_interval_seconds";
+const TASK_KEYS = [BEACONS_KEY, HEARTBEAT_INTERVAL_KEY];
+
+/**
+ * The token must be readable while the phone is locked, otherwise background
+ * heartbeats would fail with 401. AFTER_FIRST_UNLOCK allows that.
+ */
+export const SECURE_BACKGROUND_OPTIONS: SecureStore.SecureStoreOptions = {
+  keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+};
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -56,14 +69,13 @@ export async function apiFetch<T = any>(
 export async function saveSession(auth: any) {
   const office = auth.office ?? {};
   await Promise.all([
-    SecureStore.setItemAsync(TOKEN_KEY, auth.access_token),
+    SecureStore.setItemAsync(TOKEN_KEY, auth.access_token, SECURE_BACKGROUND_OPTIONS),
     SecureStore.setItemAsync("employee_id", auth.employee_id),
     SecureStore.setItemAsync("office_id", office.id ?? ""),
     SecureStore.setItemAsync("office_name", office.name ?? "Office"),
     SecureStore.setItemAsync("office_latitude", String(office.latitude ?? "")),
     SecureStore.setItemAsync("office_longitude", String(office.longitude ?? "")),
     SecureStore.setItemAsync("office_radius", String(office.radius ?? "")),
-    SecureStore.setItemAsync("bluetooth_device_id", auth.bluetooth_device_id ?? ""),
     SecureStore.setItemAsync("face_enrolled", auth.face_enrolled ? "true" : "false"),
   ]);
 }
@@ -78,7 +90,8 @@ export async function clearSession() {
       "office_latitude",
       "office_longitude",
       "office_radius",
-      "bluetooth_device_id",
+      "bluetooth_device_id", // legacy key from older app versions
+      ...TASK_KEYS,
       "face_enrolled",
       "person_id",
     ].map((k) => SecureStore.deleteItemAsync(k))

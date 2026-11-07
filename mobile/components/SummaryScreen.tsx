@@ -30,7 +30,6 @@ const SummaryScreen = ({ formData, onSubmit, isSignup = false, loading = false }
             email: formData.email,
             phone: formData.phone,
             office_id: formData.office_id,
-            bluetooth_device: formData.device_id || null,
             password: formData.password,
           },
         });
@@ -55,7 +54,7 @@ const SummaryScreen = ({ formData, onSubmit, isSignup = false, loading = false }
       );
       onSubmit?.(session);
     } catch (error: any) {
-      console.error('Error during account creation:', error);
+      console.warn('Error during account creation:', error);
       const prefix = auth ? 'Account created, but face registration failed: ' : '';
       Alert.alert('Error', prefix + (error.message || 'Please try again.'));
     } finally {
@@ -85,15 +84,6 @@ const SummaryScreen = ({ formData, onSubmit, isSignup = false, loading = false }
         <Text style={styles.value}>{formData.office_name || 'Not selected'}</Text>
         <Text style={styles.label}>Address:</Text>
         <Text style={styles.value}>{formData.office_address || 'Not selected'}</Text>
-      </View>
-
-      {/* Bluetooth Device Section */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Bluetooth Device</Text>
-        <Text style={styles.label}>Device Name:</Text>
-        <Text style={styles.value}>{formData.device_name || 'Not selected'}</Text>
-        <Text style={styles.label}>Device ID:</Text>
-        <Text style={styles.value}>{formData.device_id || 'Not selected'}</Text>
       </View>
 
       {/* Form Data Section */}

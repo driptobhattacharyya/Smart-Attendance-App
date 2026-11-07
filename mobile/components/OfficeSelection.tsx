@@ -51,7 +51,6 @@ const OfficeSelection = ({ formData, setFormData, onNext }: OfficeSelectionProps
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        console.log('Location permission denied');
         return;
       }
 

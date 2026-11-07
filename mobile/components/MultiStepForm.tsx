@@ -4,7 +4,6 @@ import * as SecureStore from 'expo-secure-store';
 import { AppContext } from "@/context/AppContext";
 import BasicInfo from './BasicInfo';
 import OfficeSelection from './OfficeSelection';
-import BluetoothDeviceSelection from './BluetoothDeviceSelection';
 import FaceRegistration from './FaceRegistration';
 import SummaryScreen from './SummaryScreen';
 import RequestForm from './request_form';
@@ -25,16 +24,14 @@ interface MultiStepFormProps {
 const SIGNUP_STEPS: Step[] = [
   { id: 1, title: 'Basic Information', component: BasicInfo },
   { id: 2, title: 'Office Selection', component: OfficeSelection },
-  { id: 3, title: 'Bluetooth Setup', component: BluetoothDeviceSelection },
-  { id: 4, title: 'Face Registration', component: FaceRegistration },
-  { id: 5, title: 'Summary', component: SummaryScreen }
+  { id: 3, title: 'Face Registration', component: FaceRegistration },
+  { id: 4, title: 'Summary', component: SummaryScreen }
 ];
 
 const ATTENDANCE_STEPS: Step[] = [
   { id: 1, title: 'Face Recognition', component: FaceRegistration },
-  { id: 2, title: 'Bluetooth Connection', component: BluetoothDeviceSelection },
-  { id: 3, title: 'Form Data', component: RequestForm },
-  { id: 4, title: 'Summary', component: SummaryScreen }
+  { id: 2, title: 'Form Data', component: RequestForm },
+  { id: 3, title: 'Summary', component: SummaryScreen }
 ];
 
 const MultiStepForm = ({ isSignup = false, onComplete, onExit }: MultiStepFormProps) => {
@@ -68,7 +65,7 @@ const MultiStepForm = ({ isSignup = false, onComplete, onExit }: MultiStepFormPr
         }
       }
     } catch (error) {
-      console.error('Error loading saved progress:', error);
+      console.warn('Error loading saved progress:', error);
     }
   };
 
@@ -83,7 +80,7 @@ const MultiStepForm = ({ isSignup = false, onComplete, onExit }: MultiStepFormPr
       };
       await SecureStore.setItemAsync('form_progress', JSON.stringify(progressData));
     } catch (error) {
-      console.error('Error saving progress:', error);
+      console.warn('Error saving progress:', error);
     }
   };
 
