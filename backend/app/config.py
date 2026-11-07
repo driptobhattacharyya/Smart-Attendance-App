@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     heartbeat_grace_minutes: int = 15  # max gap credited between two heartbeats
     max_session_hours: int = 14  # open sessions are capped at this length in reports
 
+    # Attendify Desk (see docs/api-contract-v4-desk-agent.md): the office computer is the beacon.
+    # A desk beacon only counts while the computer is online, unlocked and not idle too long.
+    require_desk_activity: bool = True
+    desk_heartbeat_grace_seconds: int = Field(default=180, ge=1)
+    desk_idle_limit_seconds: int = Field(default=600, ge=0)
+    desk_heartbeat_interval_seconds: int = Field(default=60, ge=1)
+    desk_pairing_ttl_minutes: int = Field(default=15, ge=1)
+    desk_beacon_uuid: str = "6a1f3c2e-8b4d-4e7a-9c2f-a7d1e5b3c901"
+
     # Consent and retention (see docs/api-contract-v3-admin.md). Bump CONSENT_VERSION when the
     # text in app/consent.md changes in a way that needs everyone to agree again.
     consent_version: int = 1

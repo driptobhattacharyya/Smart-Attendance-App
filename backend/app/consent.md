@@ -7,7 +7,7 @@ Your employer uses Attendify to record when you are at work. This page explains 
 - **A face embedding.** This is a list of numbers calculated from your photo. {face_processing}
 - **Timestamps:** when you check in, check out, and when the app last reported in.
 
-## Why
+{desk_app_section}## Why
 
 To work out how long you were actually present at work. Time only counts while you are inside the office area and near your desk beacon. The face check confirms that it is really you checking in.
 

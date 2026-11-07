@@ -19,6 +19,7 @@ from ..presence import (
     has_beacon,
     is_late,
     last_heartbeat_rssi,
+    last_reason,
     latest_app_session,
 )
 from ..schemas import (
@@ -202,6 +203,7 @@ async def presence_board(
                     else None
                 ),
                 best_rssi=last_heartbeat_rssi(latest) if checked_in else None,
+                reason=last_reason(latest) if checked_in else None,
                 today_minutes=sum(session_minutes(s, now, settings) for s in todays),
                 face_enrolled=face_enrolled(member),
                 has_beacon=has_beacon(member, beacons),
@@ -294,6 +296,17 @@ async def dashboard(
         unassigned_beacons=(
             await db.beacons.count_documents(
                 {"assigned_employee_id": None, "active": {"$ne": False}}
+            )
+            if is_admin
+            else None
+        ),
+        unpaired_desk_apps=(
+            await db.beacons.count_documents(
+                {
+                    "kind": "desk_app",
+                    "active": {"$ne": False},
+                    "device_token_hash": None,
+                }
             )
             if is_admin
             else None

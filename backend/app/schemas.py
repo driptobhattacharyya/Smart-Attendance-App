@@ -155,10 +155,16 @@ def normalize_uuid(value: str) -> str:
         raise ValueError("uuid must be a valid UUID") from exc
 
 
+BeaconKind = Literal["tag", "desk_app"]
+
+
 class BeaconIn(BaseModel):
     office_id: str
     name: str = Field(min_length=1, max_length=120)
-    uuid: str
+    kind: BeaconKind = "tag"
+    uuid: str | None = Field(
+        default=None, description="required for tags; desk apps default to DESK_BEACON_UUID"
+    )
     major: int | None = Field(default=None, ge=0, le=MAX_BEACON_ID, description="null = any")
     minor: int | None = Field(default=None, ge=0, le=MAX_BEACON_ID, description="null = any")
     assigned_employee_id: str | None = Field(
@@ -168,8 +174,14 @@ class BeaconIn(BaseModel):
 
     @field_validator("uuid")
     @classmethod
-    def _uuid(cls, v: str) -> str:
-        return normalize_uuid(v)
+    def _uuid(cls, v: str | None) -> str | None:
+        return None if v is None else normalize_uuid(v)
+
+    @model_validator(mode="after")
+    def _tag_needs_uuid(self) -> "BeaconIn":
+        if self.kind == "tag" and self.uuid is None:
+            raise ValueError("uuid is required")
+        return self
 
 
 class BeaconUpdate(BaseModel):
@@ -195,6 +207,17 @@ class BeaconUpdate(BaseModel):
         return self
 
 
+class DeviceOut(BaseModel):
+    hostname: str | None = None
+    os: str | None = None
+    agent_version: str | None = None
+    paired_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    locked: bool | None = None
+    idle_seconds: int | None = None
+    advertising: bool | None = None
+
+
 class BeaconOut(BaseModel):
     id: str
     office_id: str
@@ -204,6 +227,58 @@ class BeaconOut(BaseModel):
     minor: int | None
     assigned_employee_id: str | None
     active: bool
+    kind: BeaconKind = "tag"
+    device: DeviceOut | None = None
+    paired: bool = False
+    online: bool = False
+
+
+class PairingCodeOut(BaseModel):
+    code: str
+    expires_at: datetime
+
+
+class DeskPairIn(BaseModel):
+    code: str = Field(min_length=1, max_length=32)
+    hostname: str = Field(default="", max_length=255)
+    os: str = Field(default="", max_length=120)
+    agent_version: str = Field(default="", max_length=40)
+
+
+class DeskBeaconIdentity(BaseModel):
+    uuid: str
+    major: int | None
+    minor: int | None
+
+
+class DeskPairBeacon(DeskBeaconIdentity):
+    id: str
+    name: str
+
+
+class DeskEmployee(BaseModel):
+    employee_id: str
+    name: str
+
+
+class DeskPairOut(BaseModel):
+    device_token: str
+    beacon: DeskPairBeacon
+    employee: DeskEmployee | None = None
+    heartbeat_interval_seconds: int
+
+
+class DeskHeartbeatIn(BaseModel):
+    locked: bool
+    idle_seconds: int = Field(ge=0, le=10**9)
+    advertising: bool
+    agent_version: str = Field(default="", max_length=40)
+
+
+class DeskHeartbeatOut(BaseModel):
+    beacon: DeskBeaconIdentity
+    heartbeat_interval_seconds: int
+    paired: bool = True
 
 
 class BeaconReading(BaseModel):
@@ -233,6 +308,9 @@ class FaceVerifyOut(BaseModel):
 # ---------- Attendance ----------
 
 PresenceState = Literal["present", "away", "outside"]
+PresenceReason = Literal[
+    "near", "no_signal", "weak_signal", "desk_locked", "desk_idle", "desk_offline", "outside"
+]
 
 
 class CheckInIn(BaseModel):
@@ -277,6 +355,7 @@ class HeartbeatOut(BaseModel):
     checked_in: bool
     session: SessionOut | None = None
     next_heartbeat_seconds: int
+    reason: PresenceReason | None = None
 
 
 class DaySummary(BaseModel):
@@ -369,6 +448,7 @@ class PresenceRow(BaseModel):
     since: datetime | None = None
     last_heartbeat_at: datetime | None = None
     best_rssi: int | None = None
+    reason: PresenceReason | None = None
     today_minutes: int
     face_enrolled: bool
     has_beacon: bool
@@ -402,6 +482,7 @@ class DashboardOut(BaseModel):
     headcount: Headcount
     pending_requests: int
     unassigned_beacons: int | None = None
+    unpaired_desk_apps: int | None = None
     employees_without_face: int
     employees_without_beacon: int
     daily: list[DailyTotals]
@@ -420,6 +501,7 @@ class PresenceLogEntry(BaseModel):
     state: PresenceState
     distance_m: float | None = None
     best_rssi: int | None = None
+    reason: PresenceReason | None = None
 
 
 class SessionDetailOut(SessionOut):
