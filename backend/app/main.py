@@ -9,7 +9,17 @@ from .config import Settings, get_settings
 from .db import create_client, ensure_indexes
 from .face import AzureFaceProvider, OpenCVFaceEngine, OpenCVFaceProvider
 from .origin_auth import OriginAuthMiddleware
-from .routers import admin, attendance, auth, beacons, face, manager, offices, requests
+from .routers import (
+    admin,
+    attendance,
+    auth,
+    beacons,
+    consent,
+    face,
+    manager,
+    offices,
+    requests,
+)
 
 logger = logging.getLogger("attendify")
 
@@ -77,7 +87,7 @@ def create_app(settings: Settings | None = None, *, db=None, face_provider=None)
     async def health():
         return {"status": "ok", "face_recognition": app.state.face_provider is not None}
 
-    for module in (auth, offices, beacons, face, attendance, requests, manager, admin):
+    for module in (auth, consent, offices, beacons, face, attendance, requests, manager, admin):
         app.include_router(module.router, prefix="/api")
     return app
 

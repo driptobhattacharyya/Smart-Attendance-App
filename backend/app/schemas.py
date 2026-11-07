@@ -10,6 +10,21 @@ from .security import Role
 # ---------- Offices ----------
 
 
+DEFAULT_WORK_START = "09:30"
+
+
+def _validate_work_start(cls, v: str | None) -> str | None:
+    if v is None:
+        return v
+    try:
+        parsed = time.fromisoformat(v)
+    except ValueError as exc:
+        raise ValueError("work_start must be HH:MM") from exc
+    if len(v) != 5 or parsed.second or parsed.tzinfo:
+        raise ValueError("work_start must be HH:MM")
+    return v
+
+
 def _validate_tz(cls, v: str | None) -> str | None:
     if v is None:
         return v
@@ -27,8 +42,12 @@ class OfficeIn(BaseModel):
     radius: float = Field(gt=0, le=10_000, description="Geofence radius in metres")
     timezone: str = "UTC"
     address: str | None = None
+    work_start: str = Field(
+        default=DEFAULT_WORK_START, description="Office-local HH:MM; later arrivals count as late"
+    )
 
     _tz = field_validator("timezone")(_validate_tz)
+    _ws = field_validator("work_start")(_validate_work_start)
 
 
 class OfficeUpdate(BaseModel):
@@ -38,8 +57,16 @@ class OfficeUpdate(BaseModel):
     radius: float | None = Field(default=None, gt=0, le=10_000)
     timezone: str | None = None
     address: str | None = None
+    work_start: str | None = None
 
     _tz = field_validator("timezone")(_validate_tz)
+    _ws = field_validator("work_start")(_validate_work_start)
+
+    @model_validator(mode="after")
+    def _no_null_work_start(self) -> "OfficeUpdate":
+        if "work_start" in self.model_fields_set and self.work_start is None:
+            raise ValueError("work_start cannot be null")
+        return self
 
 
 class Office(OfficeIn):
@@ -74,6 +101,7 @@ class UserOut(BaseModel):
     bluetooth_device_id: str | None = None
     face_enrolled: bool = False
     active: bool = True
+    consent_required: bool = True
 
 
 class AuthOut(BaseModel):
@@ -85,6 +113,17 @@ class AuthOut(BaseModel):
     employee_id: str
     bluetooth_device_id: str | None = None
     face_enrolled: bool = False
+    consent_required: bool = True
+
+
+class ConsentIn(BaseModel):
+    version: int
+
+
+class ConsentTextOut(BaseModel):
+    version: int
+    title: str
+    body_markdown: str
 
 
 class UserUpdate(BaseModel):
@@ -313,3 +352,79 @@ class RequestOut(BaseModel):
 class DecisionIn(BaseModel):
     action: Literal["approve", "reject"]
     comment: str | None = Field(default=None, max_length=1000)
+
+
+# ---------- Manager console (contract v3) ----------
+
+PresenceBoardStatus = Literal["present", "away", "outside", "stale", "not_checked_in", "on_leave"]
+
+
+class PresenceRow(BaseModel):
+    employee_id: str
+    name: str
+    office_id: str | None = None
+    status: PresenceBoardStatus
+    checked_in: bool
+    session_id: str | None = None
+    since: datetime | None = None
+    last_heartbeat_at: datetime | None = None
+    best_rssi: int | None = None
+    today_minutes: int
+    face_enrolled: bool
+    has_beacon: bool
+
+
+class Headcount(BaseModel):
+    total: int = 0
+    present: int = 0
+    away: int = 0
+    stale: int = 0
+    outside: int = 0
+    not_checked_in: int = 0
+    on_leave: int = 0
+
+
+class DailyTotals(BaseModel):
+    date: str
+    worked_minutes: int
+    away_minutes: int
+    people: int
+
+
+class LateEntry(BaseModel):
+    employee_id: str
+    name: str
+    first_check_in: datetime
+
+
+class DashboardOut(BaseModel):
+    date: str
+    headcount: Headcount
+    pending_requests: int
+    unassigned_beacons: int | None = None
+    employees_without_face: int
+    employees_without_beacon: int
+    daily: list[DailyTotals]
+    late_today: list[LateEntry]
+
+
+class CheckInInfo(BaseModel):
+    latitude: float | None = None
+    longitude: float | None = None
+    distance_m: float | None = None
+    best_rssi: int | None = None
+
+
+class PresenceLogEntry(BaseModel):
+    at: datetime
+    state: PresenceState
+    distance_m: float | None = None
+    best_rssi: int | None = None
+
+
+class SessionDetailOut(SessionOut):
+    employee_id: str
+    name: str
+    office_id: str | None = None
+    check_in: CheckInInfo | None = None
+    presence_log: list[PresenceLogEntry] = Field(default_factory=list)

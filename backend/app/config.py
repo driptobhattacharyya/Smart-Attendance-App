@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     heartbeat_grace_minutes: int = 15  # max gap credited between two heartbeats
     max_session_hours: int = 14  # open sessions are capped at this length in reports
 
+    # Consent and retention (see docs/api-contract-v3-admin.md). Bump CONSENT_VERSION when the
+    # text in app/consent.md changes in a way that needs everyone to agree again.
+    consent_version: int = 1
+    presence_retention_days: int = Field(default=90, ge=1)
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

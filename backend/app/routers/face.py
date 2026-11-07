@@ -6,7 +6,7 @@ from ..config import Settings, get_settings
 from ..db import Database, get_db, utcnow
 from ..face import FaceError, FaceProvider, FaceUnavailableError
 from ..schemas import FaceEnrollOut, FaceVerifyOut
-from ..security import get_current_user
+from ..security import get_consenting_user
 
 router = APIRouter(prefix="/face", tags=["face"])
 
@@ -33,7 +33,7 @@ async def _read_image(image: UploadFile, settings: Settings) -> bytes:
 @router.post("/enroll", response_model=FaceEnrollOut)
 async def enroll(
     image: UploadFile = File(...),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_consenting_user),
     db: Database = Depends(get_db),
     provider: FaceProvider = Depends(get_face_provider),
     settings: Settings = Depends(get_settings),
@@ -61,7 +61,7 @@ async def enroll(
 @router.post("/verify", response_model=FaceVerifyOut)
 async def verify(
     image: UploadFile = File(...),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_consenting_user),
     db: Database = Depends(get_db),
     provider: FaceProvider = Depends(get_face_provider),
     settings: Settings = Depends(get_settings),

@@ -65,6 +65,13 @@ class Clock:
         self.now += timedelta(**kwargs)
 
 
+@pytest.fixture(autouse=True)
+def _reset_prune_throttle():
+    import app.retention
+
+    app.retention._last_run = None
+
+
 @pytest.fixture
 def settings():
     return Settings(
@@ -108,6 +115,7 @@ def admin_token(client, db, office_id):
                 "email": "admin@example.com",
                 "password_hash": hash_password("admin-password"),
                 "role": "admin",
+                "consent": consent_doc(),
                 "team_id": office_id,
                 "office_id": office_id,
                 "active": True,
@@ -115,6 +123,10 @@ def admin_token(client, db, office_id):
         )
     )
     return login(client, "ADMIN", "admin-password")
+
+
+def consent_doc(version: int = 1) -> dict:
+    return {"version": version, "accepted_at": utcnow()}
 
 
 def login(client, employee_id: str, password: str) -> str:
@@ -127,7 +139,21 @@ def auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def register(client, office_id: str, name: str = "Alice", email: str = "alice@example.com"):
+def accept_consent(client, token: str, version: int = 1):
+    r = client.post("/api/auth/consent", headers=auth(token), json={"version": version})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def register(
+    client,
+    office_id: str,
+    name: str = "Alice",
+    email: str = "alice@example.com",
+    consent: bool = True,
+):
+    """Register a user. By default they also accept the consent text, like a real first run;
+    pass ``consent=False`` to test the unconsented state."""
     r = client.post(
         "/api/auth/register",
         json={
@@ -140,7 +166,10 @@ def register(client, office_id: str, name: str = "Alice", email: str = "alice@ex
         },
     )
     assert r.status_code == 201, r.text
-    return r.json()
+    body = r.json()
+    if consent:
+        accept_consent(client, body["access_token"])
+    return body
 
 
 def enroll(client, token: str, who: str = "alice"):
@@ -170,7 +199,8 @@ def strict(settings):
 @pytest.fixture
 def clock(monkeypatch):
     clk = Clock()
-    monkeypatch.setattr("app.routers.attendance.utcnow", clk)
+    for module in ("attendance", "manager", "auth", "admin"):
+        monkeypatch.setattr(f"app.routers.{module}.utcnow", clk)
     return clk
 
 

@@ -22,6 +22,7 @@ async def ensure_indexes(db: Database) -> None:
     await db.attendance_sessions.create_index([("employee_id", ASCENDING), ("date", ASCENDING)])
     await db.attendance_requests.create_index([("team_id", ASCENDING), ("status", ASCENDING)])
     await db.attendance_requests.create_index("employee_id")
+    await db.attendance_sessions.create_index("date")
     await db.beacons.create_index("office_id")
     await db.beacons.create_index("assigned_employee_id")
 
