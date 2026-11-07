@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Download Attendify Desk</title>
+    <style>
+      :root { color-scheme: light dark; --bg: #f6f7f9; --card: #fff; --fg: #14181f; --muted: #5b6573; --accent: #2457d6; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #0f1218; --card: #181d26; --fg: #eef1f6; --muted: #9aa5b5; --accent: #6b95ff; } }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+      main { max-width: 440px; width: 100%; background: var(--card); border-radius: 16px; padding: 28px 24px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+      h1 { margin: 0 0 4px; font-size: 1.5rem; }
+      h2 { margin: 22px 0 0; font-size: 1rem; }
+      p { color: var(--muted); margin: 8px 0; }
+      a.btn { display: block; margin: 20px 0 12px; padding: 14px; text-align: center; border-radius: 10px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; }
+      a.btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+      ol, ul { color: var(--muted); padding-left: 20px; }
+      li { margin: 4px 0; }
+      small { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Attendify Desk for Windows</h1>
+      <p>
+        Attendify Desk turns your office computer into the desk beacon, so Attendify knows you are at your desk without a Bluetooth tag.
+      </p>
+      <p id="meta">Checking for the latest version...</p>
+      <a id="exe" class="btn" href="#" aria-disabled="true">Download for Windows</a>
+      <p id="soon" hidden>Coming soon. Ask your administrator for the installer.</p>
+
+      <h2>What you need</h2>
+      <ul>
+        <li>Windows 10 or 11.</li>
+        <li>Bluetooth. Most laptops have it built in. Many desktops need a small USB Bluetooth adapter.</li>
+        <li>A pairing code from your administrator, shown in the Attendify admin console.</li>
+      </ul>
+
+      <h2>Install and pair</h2>
+      <ol>
+        <li>Download the installer and run it.</li>
+        <li>Open Attendify Desk and enter the pairing code.</li>
+        <li>Leave it running on that computer while you work.</li>
+      </ol>
+
+      <h2>What it shares</h2>
+      <p>
+        Only whether the computer is locked, how many seconds since the last key press or mouse movement, whether it is broadcasting, the app version,
+        and the computer name and operating system. It never records keystrokes, screenshots, window titles or which apps you use.
+      </p>
+      <small>Android users: download the Android app from the <a href="/download/">Attendify download page</a>.</small>
+    </main>
+    <script>
+      fetch("/download/desk/latest.json", { cache: "no-cache" })
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((info) => {
+          const meta = document.getElementById("meta");
+          if (!info.url) {
+            meta.textContent = "The first release is not published yet.";
+            document.getElementById("soon").hidden = false;
+            return;
+          }
+          const a = document.getElementById("exe");
+          a.href = info.url;
+          a.removeAttribute("aria-disabled");
+          meta.textContent = "Latest version" + (info.version ? " " + info.version : "") + ".";
+        })
+        .catch(() => {
+          document.getElementById("meta").textContent = "Could not load build information.";
+          document.getElementById("soon").hidden = false;
+        });
+    </script>
+  </body>
+</html>

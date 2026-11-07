@@ -16,6 +16,7 @@ import {
   ChevronRight,
   ClipboardList,
   Clock,
+  Monitor,
   ScanFace,
   TriangleAlert,
 } from "lucide-react";
@@ -156,6 +157,16 @@ export function Overview() {
             count={d.employees_without_beacon}
             title={d.employees_without_beacon === 1 ? "person without a beacon" : "people without a beacon"}
             hint="Assign each a desk beacon, or add a shared one for the office"
+          />
+        ),
+        !!d.unpaired_desk_apps && user?.role === "admin" && (
+          <Callout
+            key="dk"
+            to="/beacons?filter=unpaired"
+            icon={<Monitor />}
+            count={d.unpaired_desk_apps}
+            title={d.unpaired_desk_apps === 1 ? "office computer not paired" : "office computers not paired"}
+            hint="Pair them with Attendify Desk so their desks count as present"
           />
         ),
         !!d.unassigned_beacons && user?.role === "admin" && (
