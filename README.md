@@ -9,6 +9,7 @@ Attendify is a smart attendance system. An employee's time only counts while thr
 | `backend/` | FastAPI API on MongoDB: auth, offices, face verification (OpenCV), check-in/out, requests, manager and admin endpoints. |
 | `admin/` | Admin panel for managers and admins (React and Vite). |
 | `mobile/` | Employee app (React Native with Expo). |
+| `desk/` | Attendify Desk: Windows tray app that makes an office computer the Bluetooth beacon (Python). |
 | `docs/` | Design documents, including the API contract. |
 | `infra/` | Deployment templates. |
 

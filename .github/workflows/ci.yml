@@ -62,3 +62,18 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npx jest --ci --passWithNoTests
+
+  desk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: desk/uv.lock
+      - run: uv sync --all-groups --frozen
+      - run: uv run ruff check .
+      - run: uv run pytest -q
