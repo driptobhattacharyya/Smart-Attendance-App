@@ -11,3 +11,6 @@ models/*.onnx
 .pytest_cache/
 .ruff_cache/
 .DS_Store
+
+# Local agent worktrees
+.claude/
