@@ -14,6 +14,7 @@ from .config import Settings
 from .db import Database, as_utc
 from .presence import worked_seconds
 from .schemas import (
+    DEFAULT_WORK_START,
     AttendanceReport,
     BeaconOut,
     DaySummary,
@@ -42,10 +43,21 @@ def office_out(doc: dict) -> Office:
         radius=doc["radius"],
         timezone=doc.get("timezone", "UTC"),
         address=doc.get("address"),
+        work_start=doc.get("work_start") or DEFAULT_WORK_START,
     )
 
 
-def user_out(doc: dict) -> UserOut:
+def face_enrolled(doc: dict) -> bool:
+    return bool(doc.get("face_embedding") or doc.get("azure_person_id"))
+
+
+def consent_required(doc: dict, settings: Settings) -> bool:
+    """True when the user has not accepted the current (or a newer) consent version."""
+    consent = doc.get("consent") or {}
+    return int(consent.get("version") or 0) < settings.consent_version
+
+
+def user_out(doc: dict, settings: Settings) -> UserOut:
     return UserOut(
         employee_id=doc["employee_id"],
         name=doc["name"],
@@ -55,8 +67,9 @@ def user_out(doc: dict) -> UserOut:
         team_id=doc.get("team_id"),
         office_id=doc.get("office_id"),
         bluetooth_device_id=doc.get("bluetooth_device_id"),
-        face_enrolled=bool(doc.get("face_embedding") or doc.get("azure_person_id")),
+        face_enrolled=face_enrolled(doc),
         active=doc.get("active", True),
+        consent_required=consent_required(doc, settings),
     )
 
 

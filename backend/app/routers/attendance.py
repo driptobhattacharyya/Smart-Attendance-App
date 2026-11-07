@@ -12,6 +12,7 @@ from ..presence import (
     decide_state,
     is_near,
 )
+from ..retention import maybe_prune
 from ..schemas import (
     AttendanceReport,
     CheckInIn,
@@ -21,7 +22,7 @@ from ..schemas import (
     SessionOut,
     StatusOut,
 )
-from ..security import get_current_user
+from ..security import get_consenting_user, get_current_user
 from ..services import (
     beacons_for_user,
     build_report,
@@ -76,7 +77,7 @@ async def attendance_status(
 @router.post("/check-in", response_model=SessionOut, status_code=status.HTTP_201_CREATED)
 async def check_in(
     data: CheckInIn,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_consenting_user),
     db: Database = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -144,13 +145,14 @@ async def check_in(
     await db.users.update_one(
         {"employee_id": user["employee_id"]}, {"$unset": {"face_verified_at": ""}}
     )
+    await maybe_prune(db, settings, now)  # housekeeping, at most once an hour
     return session_out(doc, now, settings)
 
 
 @router.post("/heartbeat", response_model=HeartbeatOut)
 async def heartbeat(
     data: HeartbeatIn,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(get_consenting_user),
     db: Database = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):

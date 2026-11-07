@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from ..db import Database, get_db
+from ..config import Settings, get_settings
+from ..db import Database, get_db, utcnow
+from ..retention import prune_presence
 from ..schemas import AdminCreateUser, UserOut, UserUpdate
 from ..security import require_admin
 from ..services import get_office, user_out
@@ -10,14 +12,19 @@ router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(requir
 
 
 @router.get("/users", response_model=list[UserOut])
-async def list_users(db: Database = Depends(get_db)):
+async def list_users(db: Database = Depends(get_db), settings: Settings = Depends(get_settings)):
     docs = await db.users.find().sort("employee_id", 1).to_list(length=None)
-    return [user_out(d) for d in docs]
+    return [user_out(d, settings) for d in docs]
 
 
 @router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-async def add_user(data: AdminCreateUser, db: Database = Depends(get_db)):
-    return user_out(await create_user(db, data, role=data.role, team_id=data.team_id))
+async def add_user(
+    data: AdminCreateUser,
+    db: Database = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await create_user(db, data, role=data.role, team_id=data.team_id)
+    return user_out(user, settings)
 
 
 @router.patch("/users/{employee_id}", response_model=UserOut)
@@ -26,6 +33,7 @@ async def update_user(
     data: UserUpdate,
     admin: dict = Depends(require_admin),
     db: Database = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ):
     changes = data.model_dump(exclude_unset=True, mode="json")
     if "office_id" in changes and not await get_office(db, changes["office_id"]):
@@ -42,4 +50,11 @@ async def update_user(
     doc = await db.users.find_one({"employee_id": employee_id})
     if not doc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
-    return user_out(doc)
+    return user_out(doc, settings)
+
+
+@router.post("/maintenance/prune")
+async def prune(db: Database = Depends(get_db), settings: Settings = Depends(get_settings)):
+    """Remove presence logs and check-in/out coordinates older than PRESENCE_RETENTION_DAYS.
+    Worked/away totals are kept."""
+    return {"sessions_pruned": await prune_presence(db, settings, utcnow())}

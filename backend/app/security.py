@@ -69,6 +69,19 @@ async def get_current_user(
     return user
 
 
+async def get_consenting_user(
+    user: dict = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """The current user, who must have accepted the current consent version.
+
+    Used by everything that collects location, beacon or face data."""
+    consent = user.get("consent") or {}
+    if int(consent.get("version") or 0) < settings.consent_version:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Consent required")
+    return user
+
+
 def require_role(*roles: Role):
     allowed = {r.value for r in roles}
 
