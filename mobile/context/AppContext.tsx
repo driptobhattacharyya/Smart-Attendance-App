@@ -12,6 +12,7 @@ import {
   SECURE_BACKGROUND_OPTIONS,
   setConsentRequiredListener,
   storeConsentRequired,
+  storeFaceEnrolled,
 } from "@/lib/api";
 import { API_CONFIG } from "@/lib/config";
 import { hasBlePermissions, isBluetoothOn, requestBlePermissions, startBeaconScan } from "@/lib/ble";
@@ -76,6 +77,9 @@ interface AppContextType {
    */
   consentRequired: boolean;
   setConsentRequired: (required: boolean) => void;
+  /** False until the user has enrolled a face; the app shows the enrolment screen until then. */
+  faceEnrolled: boolean;
+  setFaceEnrolled: (enrolled: boolean) => void;
   handleLogout: () => Promise<void>;
 }
 
@@ -89,10 +93,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [isFaceScanned, setIsFaceScanned] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [consentRequired, setConsentRequiredState] = useState(false);
+  const [faceEnrolled, setFaceEnrolledState] = useState(false);
 
   const updateConsent = useCallback((required: boolean) => {
     setConsentRequiredState(required);
     storeConsentRequired(required);
+  }, []);
+
+  const updateFaceEnrolled = useCallback((enrolled: boolean) => {
+    setFaceEnrolledState(enrolled);
+    storeFaceEnrolled(enrolled);
   }, []);
 
   // Any 403 "Consent required" from the API reopens the consent screen.
@@ -420,6 +430,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     await clearSession();
     setIsLoggedIn(false);
     setConsentRequiredState(false);
+    setFaceEnrolledState(false);
     setIsFaceScanned(false);
     setIsInsideGeofence(false);
     setOpenSession(null);
@@ -463,6 +474,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setIsLoggedIn,
         consentRequired,
         setConsentRequired: updateConsent,
+        faceEnrolled,
+        setFaceEnrolled: updateFaceEnrolled,
         handleLogout,
       }}
     >

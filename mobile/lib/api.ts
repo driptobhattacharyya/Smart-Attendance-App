@@ -107,6 +107,29 @@ export async function loadStoredConsentRequired(): Promise<boolean> {
   }
 }
 
+/** Uploads the face photo (POST /face/enroll). `token` overrides the saved login token. */
+export async function enrolFace(photo: { uri: string }, token?: string) {
+  const form = new FormData();
+  form.append("image", { uri: photo.uri, name: "face.jpg", type: "image/jpeg" } as any);
+  await apiFetch(API_CONFIG.ENDPOINTS.REGISTER_FACE, { form, token });
+}
+
+export async function storeFaceEnrolled(enrolled: boolean) {
+  try {
+    await SecureStore.setItemAsync("face_enrolled", enrolled ? "true" : "false");
+  } catch {
+    /* ignore: the in-memory state still applies */
+  }
+}
+
+export async function loadStoredFaceEnrolled(): Promise<boolean> {
+  try {
+    return (await SecureStore.getItemAsync("face_enrolled")) === "true";
+  } catch {
+    return false;
+  }
+}
+
 export async function storeConsentRequired(required: boolean) {
   try {
     await SecureStore.setItemAsync(CONSENT_REQUIRED_KEY, required ? "true" : "false");

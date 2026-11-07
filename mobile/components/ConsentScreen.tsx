@@ -31,13 +31,20 @@ type Props = {
   /** Read-only view of the notice (from the dashboard). No agree button. */
   readOnly?: boolean;
   onClose?: () => void;
+  /**
+   * Signup mode: the registration's access token, used for POST /auth/consent. With
+   * onAgreed/onDeclined set, the screen reports the choice instead of changing app state.
+   */
+  token?: string;
+  onAgreed?: () => void;
+  onDeclined?: () => void;
 };
 
 /**
  * Full-screen privacy notice. The root layout shows it instead of the app while the
  * logged-in user has not accepted the current consent version.
  */
-export default function ConsentScreen({ readOnly = false, onClose }: Props) {
+export default function ConsentScreen({ readOnly = false, onClose, token, onAgreed, onDeclined }: Props) {
   const { setConsentRequired, handleLogout } = useContext(AppContext);
   const [text, setText] = useState<ConsentText | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,9 +87,10 @@ export default function ConsentScreen({ readOnly = false, onClose }: Props) {
     if (!text) return;
     setSubmitting(true);
     try {
-      await apiFetch(API_CONFIG.ENDPOINTS.CONSENT, { json: { version: text.version } });
-      // The root layout now shows the app; this screen unmounts.
-      setConsentRequired(false);
+      await apiFetch(API_CONFIG.ENDPOINTS.CONSENT, { json: { version: text.version }, token });
+      if (onAgreed) onAgreed();
+      // Otherwise the root layout now shows the next screen; this one unmounts.
+      else setConsentRequired(false);
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
         Alert.alert("Notice updated", "The privacy notice has changed. Please read the new version.");
@@ -159,7 +167,11 @@ export default function ConsentScreen({ readOnly = false, onClose }: Props) {
         >
           {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>I agree</Text>}
         </TouchableOpacity>
-        <TouchableOpacity style={styles.linkButton} onPress={() => setDeclined(true)} disabled={submitting}>
+        <TouchableOpacity
+          style={styles.linkButton}
+          onPress={() => (onDeclined ? onDeclined() : setDeclined(true))}
+          disabled={submitting}
+        >
           <Text style={styles.link}>Not now</Text>
         </TouchableOpacity>
       </View>

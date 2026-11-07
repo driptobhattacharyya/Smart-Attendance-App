@@ -8,7 +8,15 @@ import "react-native-reanimated";
 import "@/lib/presence";
 import { AppContext, AppProvider } from "@/context/AppContext";
 import ConsentScreen from "@/components/ConsentScreen";
-import { ApiError, apiFetch, clearSession, loadStoredConsentRequired, TOKEN_KEY } from "@/lib/api";
+import FaceEnrolmentScreen from "@/components/FaceEnrolmentScreen";
+import {
+  ApiError,
+  apiFetch,
+  clearSession,
+  loadStoredConsentRequired,
+  loadStoredFaceEnrolled,
+  TOKEN_KEY,
+} from "@/lib/api";
 import { API_CONFIG } from "@/lib/config";
 import * as SecureStore from "expo-secure-store";
 import { useColorScheme } from "@/hooks/useColorScheme";
@@ -28,7 +36,7 @@ function RootLayoutContent() {
   if (!context) {
     throw new Error('RootLayoutContent must be used within an AppProvider');
   }
-  const { isLoggedIn, setIsLoggedIn, consentRequired, setConsentRequired } = context;
+  const { isLoggedIn, setIsLoggedIn, consentRequired, setConsentRequired, faceEnrolled, setFaceEnrolled } = context;
   const router = useRouter();
 
   const checkLoginStatus = async () => {
@@ -41,6 +49,7 @@ function RootLayoutContent() {
       // Make sure the saved token is still valid (it expires after a while).
       const me = await apiFetch(API_CONFIG.ENDPOINTS.ME);
       setConsentRequired(Boolean(me?.consent_required));
+      if (typeof me?.face_enrolled === "boolean") setFaceEnrolled(me.face_enrolled);
       setIsLoggedIn(true);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -49,6 +58,7 @@ function RootLayoutContent() {
       } else {
         // Offline: keep the user signed in; requests will retry later. Use the last known consent state.
         setConsentRequired(await loadStoredConsentRequired());
+        setFaceEnrolled(await loadStoredFaceEnrolled());
         setIsLoggedIn(!!(await SecureStore.getItemAsync(TOKEN_KEY)));
       }
     }
@@ -71,6 +81,16 @@ function RootLayoutContent() {
     return (
       <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
         <ConsentScreen />
+        <StatusBar style="auto" />
+      </ThemeProvider>
+    );
+  }
+
+  // After consent, a logged-in user without an enrolled face enrols before the tabs.
+  if (isLoggedIn && !faceEnrolled) {
+    return (
+      <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
+        <FaceEnrolmentScreen />
         <StatusBar style="auto" />
       </ThemeProvider>
     );
