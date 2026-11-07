@@ -16,12 +16,27 @@ export const SECURE_BACKGROUND_OPTIONS: SecureStore.SecureStoreOptions = {
   keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
 };
 
+export const CONSENT_REQUIRED_KEY = "consent_required";
+/** 403 detail the API returns while the user has not accepted the current privacy notice. */
+const CONSENT_REQUIRED_DETAIL = "Consent required";
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
     super(message);
     this.status = status;
   }
+}
+
+export function isConsentRequiredError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403 && error.message === CONSENT_REQUIRED_DETAIL;
+}
+
+let consentRequiredListener: (() => void) | null = null;
+
+/** AppContext registers this so any 403 "Consent required" reopens the consent screen. */
+export function setConsentRequiredListener(listener: (() => void) | null) {
+  consentRequiredListener = listener;
 }
 
 function errorMessage(body: any, fallback: string): string {
@@ -60,7 +75,9 @@ export async function apiFetch<T = any>(
   if (response.status === 204) return null as T;
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new ApiError(errorMessage(data, `Request failed (${response.status})`), response.status);
+    const error = new ApiError(errorMessage(data, `Request failed (${response.status})`), response.status);
+    if (isConsentRequiredError(error)) consentRequiredListener?.();
+    throw error;
   }
   return data as T;
 }
@@ -77,7 +94,25 @@ export async function saveSession(auth: any) {
     SecureStore.setItemAsync("office_longitude", String(office.longitude ?? "")),
     SecureStore.setItemAsync("office_radius", String(office.radius ?? "")),
     SecureStore.setItemAsync("face_enrolled", auth.face_enrolled ? "true" : "false"),
+    SecureStore.setItemAsync(CONSENT_REQUIRED_KEY, auth.consent_required ? "true" : "false"),
   ]);
+}
+
+/** Last known consent state, for starting up while offline. */
+export async function loadStoredConsentRequired(): Promise<boolean> {
+  try {
+    return (await SecureStore.getItemAsync(CONSENT_REQUIRED_KEY)) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export async function storeConsentRequired(required: boolean) {
+  try {
+    await SecureStore.setItemAsync(CONSENT_REQUIRED_KEY, required ? "true" : "false");
+  } catch {
+    /* ignore: the in-memory state still applies */
+  }
 }
 
 export async function clearSession() {
@@ -94,6 +129,7 @@ export async function clearSession() {
       ...TASK_KEYS,
       "face_enrolled",
       "person_id",
+      CONSENT_REQUIRED_KEY,
     ].map((k) => SecureStore.deleteItemAsync(k))
   );
 }

@@ -19,5 +19,9 @@ export const API_CONFIG = {
     GET_ATTENDANCE: "/attendance/me",
     SUBMIT_REQUEST: "/requests",
     MY_REQUESTS: "/requests/me",
+    CONSENT_TEXT: "/consent/text",
+    CONSENT: "/auth/consent",
+    CONSENT_WITHDRAW: "/auth/consent/withdraw",
+    MY_EXPORT: "/auth/me/export",
   },
 } as const;
