@@ -146,7 +146,7 @@ export default function LocationServices() {
       <View style={{ flex: 1, paddingTop: 20 }}>
         {locationPermission && (
           <MapView
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
             provider={PROVIDER_GOOGLE}
             initialRegion={{
               latitude: officeLocation.latitude,

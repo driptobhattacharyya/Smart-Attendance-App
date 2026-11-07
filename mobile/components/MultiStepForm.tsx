@@ -146,7 +146,7 @@ const MultiStepForm = ({ isSignup = false, onComplete, onExit }: MultiStepFormPr
 
   return (
     <View style={styles.container}>
-      <View style={styles.header} marginTop={15}>
+      <View style={[styles.header, { marginTop: 15 }]}>
         <Text style={styles.title}>
           {STEPS[currentStep - 1].title}
         </Text>

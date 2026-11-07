@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { BarChart } from "react-native-gifted-charts";
-import { useNavigation } from "@react-navigation/native";
 import * as SecureStore from "expo-secure-store";
 import { useRouter } from "expo-router";
 import { format } from "date-fns";
@@ -25,14 +24,6 @@ interface AttendanceRecord {
   exit_times: (string | null)[]; // null while still checked in
 }
 
-interface FormData {
-  reason: string;
-  date_range: string;
-  entry_time: string;
-  exit_time: string;
-  description: string;
-}
-
 interface Summary {
   totalHours: number;
   averageDailyTime: string;
@@ -40,7 +31,6 @@ interface Summary {
 }
 
 const UserDashboard = () => {
-  const navigation = useNavigation();
   const router = useRouter();
   const context = useContext(AppContext);
   if (!context) {
@@ -57,8 +47,7 @@ const UserDashboard = () => {
   });
   const [isModalVisible, setIsModalVisible] = useState(false);
 
-  const handleFormSubmit = (formData: FormData) => {
-    console.log("Form Submitted:", formData);
+  const handleFormSubmit = () => {
     setIsModalVisible(false);
   };
 
@@ -128,35 +117,15 @@ const UserDashboard = () => {
     );
   }
 
-  const Labels = ({ x, y, bandwidth, data }: { x: number; y: number; bandwidth: number; data: any[] }) => {
-    return data.map((value: any, index: number) => (
-      <Text
-        key={index}
-        x={x(index) + bandwidth / 2}
-        y={y(value) - 10}
-        fontSize={14}
-        fill="black"
-        textAnchor="middle"
-      >
-        {value}
-      </Text>
-    ));
-  };
-
   const data =
     attendanceData?.map((record) => {
-      const totalTime = Math.ceil(parseFloat(record.total_time / 60)); // Convert minutes to hours
+      const totalTime = Math.ceil(record.total_time / 60); // Convert minutes to hours
       return {
         value: isNaN(totalTime) ? 0 : totalTime, // Set `value` as required
         label: format(new Date(record.date), "dd/MM"),
         frontColor: "#cbb8fc",
       };
     }) || [];
-  console.log(
-    "BarChart data:",
-    data.map((item) => item.value)
-  );
-  
 
   return (
     <ScrollView style={styles.container}>
@@ -194,15 +163,14 @@ const UserDashboard = () => {
       <View style={styles.chartContainer}>
         <Text style={styles.chartTitle}>Weekly Attendance</Text>
         <BarChart
-          style={{ height: 200, marginBottom: 10 }}
-          data={data} // Pass only the values to the chart
-          // contentInset={{ top: 30, bottom: 10 }}
-          spacingInner={0.4} // Adjust space between bars
+          height={200}
+          data={data}
+          spacing={16}
           showGradient={true}
           gradientColor={"#442c91"}
           noOfSections={4}
           xAxisLabelTextStyle={styles.xAxisText}
-          yAxisLabelTextStyle={styles.xAxisText}
+          yAxisTextStyle={styles.xAxisText}
           animationDuration={200}
         />
       </View>
@@ -310,30 +278,6 @@ const styles = StyleSheet.create({
   xAxisText: {
     fontSize: 12,
     color: "#442c91",
-  },
-  attendanceList: {
-    marginBottom: 20,
-  },
-  listTitle: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#442c91",
-    marginBottom: 10,
-  },
-  recordItem: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    backgroundColor: "#fdf9ff",
-    padding: 10,
-    borderRadius: 5,
-    marginBottom: 10,
-  },
-  recordText: {
-    fontSize: 14,
-    color: "#442c91",
-  },
-  lateStatus: {
-    color: "#e63946",
   },
   loadingContainer: {
     flex: 1,
