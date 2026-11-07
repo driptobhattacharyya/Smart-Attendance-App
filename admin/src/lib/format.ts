@@ -1,4 +1,4 @@
-import type { PresenceStatus, SessionState } from "./types";
+import type { PresenceReason, PresenceStatus, SessionState } from "./types";
 
 export function formatMinutes(total: number | null | undefined, empty = "—"): string {
   if (!total || total < 0) return empty;
@@ -139,3 +139,12 @@ export function parseOptionalInt(value: string): number | null | undefined {
   if (!/^\d+$/.test(v) || Number(v) > 65535) return undefined; // invalid
   return Number(v);
 }
+
+/** Plain-words explanation of why someone is away from their desk. */
+export const REASON_LABEL: Partial<Record<PresenceReason, string>> = {
+  desk_locked: "Computer locked",
+  desk_idle: "Computer idle",
+  desk_offline: "Computer offline",
+  no_signal: "Phone can't hear desk",
+  weak_signal: "Weak signal",
+};

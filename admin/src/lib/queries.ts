@@ -17,11 +17,13 @@ export function usePeople() {
   });
 }
 
-export function useBeacons(officeId = "") {
+/** Pass `pollMs` while something waits on the list (e.g. a computer being paired). */
+export function useBeacons(officeId = "", pollMs: number | false = false) {
   return useQuery({
     queryKey: ["beacons", officeId],
     queryFn: () =>
       api<Beacon[]>(`/beacons${officeId ? `?office_id=${encodeURIComponent(officeId)}` : ""}`),
+    refetchInterval: pollMs,
   });
 }
 

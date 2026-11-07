@@ -31,6 +31,20 @@ export interface AuthOut {
   office?: Office | null;
 }
 
+export type BeaconKind = "tag" | "desk_app";
+
+/** The Attendify Desk app on an office computer (desk_app beacons only). */
+export interface DeskDevice {
+  hostname: string | null;
+  os: string | null;
+  agent_version: string | null;
+  paired_at: string | null;
+  last_seen_at: string | null;
+  locked: boolean | null;
+  idle_seconds: number | null;
+  advertising: boolean | null;
+}
+
 export interface Beacon {
   id: string;
   office_id: string;
@@ -40,7 +54,26 @@ export interface Beacon {
   minor: number | null;
   assigned_employee_id: string | null;
   active: boolean;
+  kind: BeaconKind;
+  device: DeskDevice | null;
+  paired: boolean;
+  online: boolean;
 }
+
+export interface PairingCode {
+  code: string;
+  expires_at: string;
+}
+
+/** Why a person is away, as the presence log records it (desk-aware). */
+export type PresenceReason =
+  | "near"
+  | "no_signal"
+  | "weak_signal"
+  | "desk_locked"
+  | "desk_idle"
+  | "desk_offline"
+  | "outside";
 
 export type PresenceStatus =
   | "present"
@@ -60,6 +93,7 @@ export interface PresenceRow {
   since: string | null;
   last_heartbeat_at: string | null;
   best_rssi: number | null;
+  reason?: PresenceReason | null;
   today_minutes: number;
   face_enrolled: boolean;
   has_beacon: boolean;
@@ -70,6 +104,7 @@ export interface Dashboard {
   headcount: Record<PresenceStatus | "total", number>;
   pending_requests: number;
   unassigned_beacons: number | null;
+  unpaired_desk_apps?: number | null;
   employees_without_face: number;
   employees_without_beacon: number;
   daily: { date: string; worked_minutes: number; away_minutes: number; people: number }[];

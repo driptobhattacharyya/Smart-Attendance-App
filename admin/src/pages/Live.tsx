@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { RefreshCw, Users } from "lucide-react";
 import { api } from "../lib/api";
 import type { PresenceRow, PresenceStatus } from "../lib/types";
-import { fmtTime, formatMinutes, signalLevel, STATUS_LABEL, timeAgo } from "../lib/format";
+import { fmtTime, formatMinutes, REASON_LABEL, signalLevel, STATUS_LABEL, timeAgo } from "../lib/format";
 import { officeName, useOffices } from "../lib/queries";
 import { Avatar, Card, ChipGroup, EmptyState, ErrorState, PageHeader, SignalBars, StatusBadge, Table, TableSkeleton, Td, Th } from "../ui/misc";
 import { Button } from "../ui/Button";
@@ -162,6 +162,9 @@ export function Live() {
                   </Td>
                   <Td>
                     <StatusBadge status={r.status} />
+                    {r.status === "away" && r.reason && REASON_LABEL[r.reason] && (
+                      <p className="mt-0.5 text-xs text-muted">{REASON_LABEL[r.reason]}</p>
+                    )}
                     {r.status === "stale" && r.last_heartbeat_at && (
                       <p className="mt-0.5 text-xs text-muted">Last seen {timeAgo(r.last_heartbeat_at, now)}</p>
                     )}
