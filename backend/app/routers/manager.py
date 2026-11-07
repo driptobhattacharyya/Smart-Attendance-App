@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..config import Settings, get_settings
 from ..db import Database, get_db, utcnow
+from ..face import FaceProvider, FaceUnavailableError
 from ..schemas import AttendanceReport, DecisionIn, RequestOut, UserOut
 from ..security import Role, require_manager
 from ..services import (
@@ -16,6 +17,7 @@ from ..services import (
     user_out,
     validate_range,
 )
+from .face import get_face_provider
 
 router = APIRouter(prefix="/manager", tags=["manager"])
 
@@ -57,7 +59,7 @@ async def team_attendance(
         .sort("employee_id", 1)
         .to_list(length=None)
     )
-    return [await build_report(db, m, start, end, now, settings.max_session_hours) for m in members]
+    return [await build_report(db, m, start, end, now, settings) for m in members]
 
 
 @router.get("/attendance/{employee_id}", response_model=AttendanceReport)
@@ -74,7 +76,7 @@ async def employee_attendance(
     end = end or now.date()
     start = start or end - timedelta(days=30)
     validate_range(start, end)
-    return await build_report(db, member, start, end, now, settings.max_session_hours)
+    return await build_report(db, member, start, end, now, settings)
 
 
 @router.get("/requests", response_model=list[RequestOut])
@@ -158,10 +160,13 @@ async def reset_face(
     employee_id: str,
     manager: dict = Depends(require_manager),
     db: Database = Depends(get_db),
+    provider: FaceProvider = Depends(get_face_provider),
 ):
     """Clear an employee's enrolled face so they can register it again."""
-    await _team_member(db, manager, employee_id)
-    await db.users.update_one(
-        {"employee_id": employee_id},
-        {"$unset": {"face_embedding": "", "face_enrolled_at": "", "face_verified_at": ""}},
-    )
+    member = await _team_member(db, manager, employee_id)
+    try:
+        fields = await provider.reset(member)
+    except FaceUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    unset = {f: "" for f in [*fields, "face_enrolled_at", "face_verified_at"]}
+    await db.users.update_one({"employee_id": employee_id}, {"$unset": unset})

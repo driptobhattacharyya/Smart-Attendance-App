@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,15 +26,23 @@ class Settings(BaseSettings):
 
     allow_self_registration: bool = True
 
-    # Face recognition (OpenCV YuNet + SFace)
+    # Face recognition. "opencv" = open-source YuNet + SFace (default); "azure" = Azure AI Face.
+    face_provider: Literal["opencv", "azure"] = "opencv"
     face_models_dir: str = "models"
     face_match_threshold: float = 0.363  # SFace cosine-similarity threshold recommended by OpenCV
     face_verification_ttl_minutes: int = 10  # a successful face scan unlocks check-in for this long
     max_upload_bytes: int = 5 * 1024 * 1024
+    # Azure AI Face (only used when FACE_PROVIDER=azure)
+    azure_face_endpoint: str = ""
+    azure_face_key: str = ""
+    azure_person_group_id: str = "attendify"
 
     # Attendance rules
-    require_bluetooth: bool = False
+    # Time only counts while the phone hears the employee's beacon (see docs/api-contract-v2.md).
+    require_bluetooth: bool = True
     bluetooth_min_rssi: int = -80
+    heartbeat_interval_seconds: int = 300  # advice to the app
+    heartbeat_grace_minutes: int = 15  # max gap credited between two heartbeats
     max_session_hours: int = 14  # open sessions are capped at this length in reports
 
     @property

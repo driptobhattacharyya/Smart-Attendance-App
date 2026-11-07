@@ -10,8 +10,18 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import HTTPException, status
 
+from .config import Settings
 from .db import Database, as_utc
-from .schemas import AttendanceReport, DaySummary, Office, RequestOut, SessionOut, UserOut
+from .presence import worked_seconds
+from .schemas import (
+    AttendanceReport,
+    BeaconOut,
+    DaySummary,
+    Office,
+    RequestOut,
+    SessionOut,
+    UserOut,
+)
 
 MAX_REPORT_DAYS = 93
 
@@ -45,7 +55,20 @@ def user_out(doc: dict) -> UserOut:
         team_id=doc.get("team_id"),
         office_id=doc.get("office_id"),
         bluetooth_device_id=doc.get("bluetooth_device_id"),
-        face_enrolled=bool(doc.get("face_embedding")),
+        face_enrolled=bool(doc.get("face_embedding") or doc.get("azure_person_id")),
+        active=doc.get("active", True),
+    )
+
+
+def beacon_out(doc: dict) -> BeaconOut:
+    return BeaconOut(
+        id=str(doc["_id"]),
+        office_id=doc["office_id"],
+        name=doc["name"],
+        uuid=doc["uuid"],
+        major=doc.get("major"),
+        minor=doc.get("minor"),
+        assigned_employee_id=doc.get("assigned_employee_id"),
         active=doc.get("active", True),
     )
 
@@ -87,23 +110,42 @@ def local_date(moment: datetime, tz: ZoneInfo) -> str:
     return as_utc(moment).astimezone(tz).date().isoformat()
 
 
-def session_minutes(doc: dict, now: datetime, max_hours: int) -> int:
+def session_durations(doc: dict, now: datetime, settings: Settings) -> tuple[int, int]:
+    """(worked_seconds, away_seconds) for a session.
+
+    ``request`` sessions (approved corrections) count their full duration. ``app`` sessions count
+    only the time the employee was *present* (see ``presence.worked_seconds``). Sessions from
+    before presence tracking (no ``last_state``) fall back to their wall-clock length.
+    """
     start = as_utc(doc["started_at"])
-    if doc.get("ended_at"):
-        end = as_utc(doc["ended_at"])
-    else:
-        end = min(now, start + timedelta(hours=max_hours))
-    return max(0, int((end - start).total_seconds() // 60))
+    max_seconds = settings.max_session_hours * 3600
+    if doc.get("source", "app") == "request" or "last_state" not in doc:
+        if doc.get("ended_at"):
+            end = as_utc(doc["ended_at"])
+        else:
+            end = min(now, start + timedelta(seconds=max_seconds))
+        return max(0, int((end - start).total_seconds())), 0
+    grace = settings.heartbeat_grace_minutes * 60
+    return worked_seconds(doc, now, grace, max_seconds), int(doc.get("away_seconds") or 0)
 
 
-def session_out(doc: dict, now: datetime, max_hours: int) -> SessionOut:
+def session_minutes(doc: dict, now: datetime, settings: Settings) -> int:
+    return session_durations(doc, now, settings)[0] // 60
+
+
+def session_out(doc: dict, now: datetime, settings: Settings) -> SessionOut:
+    worked, away = session_durations(doc, now, settings)
+    is_request = doc.get("source", "app") == "request"
     return SessionOut(
         id=str(doc["_id"]),
         date=doc["date"],
         started_at=as_utc(doc["started_at"]),
         ended_at=as_utc(doc["ended_at"]) if doc.get("ended_at") else None,
         source=doc.get("source", "app"),
-        minutes=session_minutes(doc, now, max_hours),
+        minutes=worked // 60,
+        present_minutes=worked // 60,
+        away_minutes=away // 60,
+        state=None if is_request else doc.get("last_state"),
     )
 
 
@@ -115,7 +157,7 @@ def validate_range(start: date, end: date) -> None:
 
 
 async def build_report(
-    db: Database, user: dict, start: date, end: date, now: datetime, max_hours: int
+    db: Database, user: dict, start: date, end: date, now: datetime, settings: Settings
 ) -> AttendanceReport:
     employee_id = user["employee_id"]
     sessions = (
@@ -141,7 +183,7 @@ async def build_report(
 
     by_day: dict[str, list[SessionOut]] = defaultdict(list)
     for doc in sessions:
-        by_day[doc["date"]].append(session_out(doc, now, max_hours))
+        by_day[doc["date"]].append(session_out(doc, now, settings))
 
     leave_days: set[str] = set()
     for req in leave_requests:
@@ -168,3 +210,22 @@ async def build_report(
         total_minutes=sum(d.total_minutes for d in days),
         days=days,
     )
+
+
+async def beacons_for_user(db: Database, user: dict) -> list[dict]:
+    """The beacons this user's phone should scan for: active beacons assigned to them, or,
+    if there are none, the active unassigned (zone) beacons of their office."""
+    assigned = await db.beacons.find(
+        {"assigned_employee_id": user["employee_id"], "active": {"$ne": False}}
+    ).to_list(length=None)
+    if assigned:
+        return assigned
+    if not user.get("office_id"):
+        return []
+    return await db.beacons.find(
+        {
+            "office_id": user["office_id"],
+            "assigned_employee_id": None,
+            "active": {"$ne": False},
+        }
+    ).to_list(length=None)

@@ -1,3 +1,4 @@
+import uuid as uuidlib
 from datetime import date, datetime, time
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -102,6 +103,79 @@ class AdminCreateUser(RegisterIn):
     team_id: str | None = None
 
 
+# ---------- Beacons ----------
+
+MAX_BEACON_ID = 65535
+
+
+def normalize_uuid(value: str) -> str:
+    """iBeacon proximity UUID in canonical lowercase dashed form."""
+    try:
+        return str(uuidlib.UUID(value.strip()))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError("uuid must be a valid UUID") from exc
+
+
+class BeaconIn(BaseModel):
+    office_id: str
+    name: str = Field(min_length=1, max_length=120)
+    uuid: str
+    major: int | None = Field(default=None, ge=0, le=MAX_BEACON_ID, description="null = any")
+    minor: int | None = Field(default=None, ge=0, le=MAX_BEACON_ID, description="null = any")
+    assigned_employee_id: str | None = Field(
+        default=None, description="null = shared zone beacon for the whole office"
+    )
+    active: bool = True
+
+    @field_validator("uuid")
+    @classmethod
+    def _uuid(cls, v: str) -> str:
+        return normalize_uuid(v)
+
+
+class BeaconUpdate(BaseModel):
+    office_id: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    uuid: str | None = None
+    major: int | None = Field(default=None, ge=0, le=MAX_BEACON_ID)
+    minor: int | None = Field(default=None, ge=0, le=MAX_BEACON_ID)
+    assigned_employee_id: str | None = None
+    active: bool | None = None
+
+    @field_validator("uuid")
+    @classmethod
+    def _uuid(cls, v: str | None) -> str | None:
+        return None if v is None else normalize_uuid(v)
+
+    @model_validator(mode="after")
+    def _no_null_required(self) -> "BeaconUpdate":
+        # major/minor/assigned_employee_id may be set to null; the others may not.
+        for field in ("office_id", "name", "uuid", "active"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null")
+        return self
+
+
+class BeaconOut(BaseModel):
+    id: str
+    office_id: str
+    name: str
+    uuid: str
+    major: int | None
+    minor: int | None
+    assigned_employee_id: str | None
+    active: bool
+
+
+class BeaconReading(BaseModel):
+    """What the phone heard: one iBeacon advertisement."""
+
+    uuid: str = Field(max_length=64)
+    major: int | None = Field(default=None, ge=0, le=MAX_BEACON_ID)
+    minor: int | None = Field(default=None, ge=0, le=MAX_BEACON_ID)
+    rssi: int = Field(ge=-200, le=20)
+
+
 # ---------- Face ----------
 
 
@@ -119,13 +193,18 @@ class FaceVerifyOut(BaseModel):
 
 # ---------- Attendance ----------
 
+PresenceState = Literal["present", "away", "outside"]
+
 
 class CheckInIn(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     accuracy: float | None = Field(default=None, ge=0, description="GPS accuracy in metres")
-    bluetooth_device_id: str | None = None
-    bluetooth_rssi: int | None = None
+    beacons: list[BeaconReading] = Field(default_factory=list, max_length=64)
+
+
+class HeartbeatIn(CheckInIn):
+    pass
 
 
 class CheckOutIn(BaseModel):
@@ -140,6 +219,9 @@ class SessionOut(BaseModel):
     ended_at: datetime | None
     source: Literal["app", "request"]
     minutes: int
+    present_minutes: int = 0
+    away_minutes: int = 0
+    state: PresenceState | None = None
 
 
 class StatusOut(BaseModel):
@@ -147,6 +229,15 @@ class StatusOut(BaseModel):
     session: SessionOut | None = None
     face_verified_until: datetime | None = None
     today_minutes: int
+    presence: PresenceState | None = None
+    heartbeat_interval_seconds: int
+
+
+class HeartbeatOut(BaseModel):
+    state: PresenceState
+    checked_in: bool
+    session: SessionOut | None = None
+    next_heartbeat_seconds: int
 
 
 class DaySummary(BaseModel):

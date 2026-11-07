@@ -18,6 +18,9 @@ dependencies = [
     "tzdata>=2024.1",
 ]
 
+[project.optional-dependencies]
+azure = ["azure-ai-vision-face>=1.0.0b2"]
+
 [dependency-groups]
 dev = [
     "pytest>=8",
