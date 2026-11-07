@@ -1,4 +1,4 @@
-import { Tabs } from "expo-router";
+import { Tabs } from "expo-router/js-tabs";
 import React from "react";
 import { Platform } from "react-native";
 
@@ -18,6 +18,8 @@ export default function TabLayout() {
       screenOptions={{
         tabBarActiveTintColor: Colors[colorScheme ?? "light"].tint,
         headerShown: false,
+        // Mount every tab at startup: the location watcher must run without opening its tab.
+        lazy: false,
         tabBarButton: HapticTab,
         tabBarBackground: TabBarBackground,
         tabBarStyle: Platform.select({
@@ -34,7 +36,7 @@ export default function TabLayout() {
         options={{
           title: "Home",
           tabBarIcon: ({ color }) => (
-            <IconSymbol size={28} name="house.fill" color={color} />
+            <IconSymbol size={28} name="house.fill" color={color as string} />
           ),
         }}
       />
@@ -44,7 +46,7 @@ export default function TabLayout() {
         options={{
           title: "Bluetooth",
           tabBarIcon: ({ color }) => (
-            <Ionicons name="bluetooth-sharp" size={24} color={color} />
+            <Ionicons name="bluetooth-sharp" size={24} color={color as string} />
             
           ),
         }}
@@ -54,7 +56,7 @@ export default function TabLayout() {
         options={{
           title: "Location",
           tabBarIcon: ({ color }) => (
-            <Ionicons name="location-sharp" size={24} color={color} />
+            <Ionicons name="location-sharp" size={24} color={color as string} />
           ),
         }}
       />
@@ -63,7 +65,7 @@ export default function TabLayout() {
         options={{
           title: "Dashboard",
           tabBarIcon: ({ color }) => (
-            <FontAwesome5 name="user-alt" size={24} color={color} />
+            <FontAwesome5 name="user-alt" size={24} color={color as string} />
           ),
         }}
       />
