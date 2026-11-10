@@ -9,6 +9,8 @@ from typing import Any
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
+from ..attendance.face_store import delete_enrollment, get_enrollment
+from ..attendance.lifecycle import end_open_session
 from ..auth.deps import Ctx, consent_required_for
 from ..auth.emails import queue_invite_email
 from ..auth.models import AuthToken
@@ -23,7 +25,7 @@ from ..rbac.scope import is_in_team, team_user_ids
 from ..tenancy.models import Organization, Role
 from ..tenancy.service import assert_seat_available
 from .models import Department, User
-from .schemas import MeOut, OrgBrief, UserCreate, UserUpdate
+from .schemas import MeOut, OfficeBrief, OrgBrief, UserCreate, UserUpdate
 
 
 def snapshot(user: User) -> dict[str, Any]:
@@ -106,8 +108,18 @@ async def me(ctx: Ctx) -> MeOut:
             "office_id last_login_at created_at"
         ).split()
     }
+    office = None
+    if user.office_id:
+        found = (
+            await ctx.db.execute(select(Office).where(Office.id == user.office_id))
+        ).scalar_one_or_none()
+        office = OfficeBrief.model_validate(found) if found else None
+    enrolled = await get_enrollment(ctx.db, user.id) is not None
     return MeOut(
         **base,
+        modules=ctx.org.modules,
+        office=office,
+        face_enrolled=enrolled,
         permissions=sorted(ctx.principal.permissions),
         org=OrgBrief(id=ctx.org.id, name=ctx.org.name, slug=ctx.org.slug, modules=ctx.org.modules),
         consent_required=await consent_required_for(ctx.db, ctx.org, ctx.user_id),
@@ -320,6 +332,11 @@ async def disable_user(ctx: Ctx, user_id: uuid.UUID) -> User:
     user.status = "disabled"
     user.disabled_at = utcnow()
     revoked = await revoke_user_sessions(ctx.db, user.id)
+    # Biometric data of someone who left is deleted; an open session is closed.
+    face_deleted = await delete_enrollment(ctx.db, user.id)
+    await end_open_session(
+        ctx.db, ctx.org_id, user.id, reason="account_disabled", actor_user_id=ctx.user_id
+    )
     # Outstanding invite / reset links die with the account.
     await ctx.db.execute(
         update(AuthToken)
@@ -328,7 +345,11 @@ async def disable_user(ctx: Ctx, user_id: uuid.UUID) -> User:
     )
     await ctx.db.flush()
     await ctx.audit(
-        "people.disable", "user", user.id, before, {**snapshot(user), "sessions_revoked": revoked}
+        "people.disable",
+        "user",
+        user.id,
+        before,
+        {**snapshot(user), "sessions_revoked": revoked, "face_deleted": face_deleted},
     )
     return user
 

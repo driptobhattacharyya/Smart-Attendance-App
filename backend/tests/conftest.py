@@ -24,7 +24,11 @@ from alembic.config import Config
 from alembic import command
 from app.core.config import Settings
 from app.core.email import CapturingEmailSender
+from app.face import FaceConfig
+from app.face.providers import OpenCVProvider
 from app.main import create_app
+
+from .face.fakes import FakeEngine, FakeSpoof
 
 BACKEND = Path(__file__).resolve().parent.parent
 APP_PASSWORD = "app-test-pw"
@@ -193,6 +197,8 @@ def settings(cluster: Cluster) -> Settings:
 @pytest_asyncio.fixture
 async def app(settings: Settings):
     application = create_app(settings)
+    engine = FakeEngine()
+    application.state.face_provider = OpenCVProvider(engine, FakeSpoof(engine), FaceConfig())
     yield application
     await application.state.db.dispose()
 

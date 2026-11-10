@@ -387,10 +387,10 @@ def compute_day(
             flags.add("short_day")
         if on_leave and status in ("absent", "half_day"):
             status = "on_leave"
+    elif non_working:  # weekends and holidays inside a leave are not leave days
+        status = non_working
     elif on_leave:
         status = "on_leave"
-    elif non_working:
-        status = non_working
     else:
         status = "absent"
 

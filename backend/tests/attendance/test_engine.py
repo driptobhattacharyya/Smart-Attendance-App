@@ -131,7 +131,8 @@ def test_no_events_statuses():
     assert run([], day=date(2026, 3, 8)).status == "weekend"
     assert run([], rules=rules(holidays=[D])).status == "holiday"
     assert run([], on_leave=True).status == "on_leave"
-    assert run([], day=date(2026, 3, 7), on_leave=True).status == "on_leave"
+    assert run([], day=date(2026, 3, 7), on_leave=True).status == "weekend"
+    assert run([], rules=rules(holidays=[D]), on_leave=True).status == "holiday"
     assert run([], rules=rules(weekly_off=[0])).status == "weekend"
     assert not run([]).has_activity
 

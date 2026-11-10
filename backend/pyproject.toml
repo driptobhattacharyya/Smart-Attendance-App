@@ -19,6 +19,7 @@ dependencies = [
     "numpy>=1.26",
     "opencv-python-headless>=4.10",
     "tzdata>=2024.1",
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -28,7 +29,6 @@ azure = ["azure-ai-vision-face>=1.0.0b2"]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
-    "httpx>=0.27",
     "ruff>=0.5",
 ]
 

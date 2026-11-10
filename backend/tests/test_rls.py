@@ -52,6 +52,31 @@ async def populate(client, org, mailbox):
     )
     me = (await client.get(f"{API}/people/me", headers=h)).json()
     await client.post(f"{API}/auth/consent", json={"version": me["consent_version"]}, headers=h)
+    # Attendance data: enrol, verify, check in, heartbeat, request (the policy comes from signup).
+    from .attendance import helpers as att
+
+    offices = (await client.get(f"{API}/places/offices", headers=h)).json()
+    await client.patch(f"{API}/people/{me['id']}", json={"office_id": offices[0]["id"]}, headers=h)
+    org.users["owner"] = me
+    await att.enroll(client, org, "owner")
+    assert (await att.verify_face(client, org, "owner")).status_code == 200
+    r = await client.post(
+        f"{API}/attendance/check-in",
+        json={"mode": "onsite", "location": att.loc(1, 2)},
+        headers=h,
+    )
+    assert r.status_code == 201, r.text
+    assert (
+        await client.post(
+            f"{API}/attendance/heartbeat", json={"location": att.loc(1, 2)}, headers=h
+        )
+    ).status_code == 200
+    r = await client.post(
+        f"{API}/requests",
+        json={"kind": "leave", "start_date": "2099-01-05", "reason": "holiday trip"},
+        headers=h,
+    )
+    assert r.status_code == 201, r.text
 
 
 async def insert_idempotency_row(session_factory, org_id):
@@ -165,16 +190,22 @@ async def test_select_update_delete_see_only_own_org(cluster, two_orgs, owner_co
             ), table
             assert await conn.fetchval(f"SELECT count(*) FROM {table}") == own, table
             # Raw SQL against the other org's rows touches nothing.
-            if table not in ("audit_log",):
+            can_update = await conn.fetchval(
+                "SELECT has_table_privilege('attendify_app', $1, 'UPDATE')", table
+            )
+            can_delete = await conn.fetchval(
+                "SELECT has_table_privilege('attendify_app', $1, 'DELETE')", table
+            )
+            if can_update:
                 updated = await conn.execute(
                     f"UPDATE {table} SET {col} = {col} WHERE {col} = $1::uuid", b.id
                 )
                 assert updated == "UPDATE 0", table
-                if table != "organizations":  # no DELETE grant there
-                    assert (
-                        await conn.execute(f"DELETE FROM {table} WHERE {col} = $1::uuid", b.id)
-                        == "DELETE 0"
-                    ), table
+            if can_delete:
+                assert (
+                    await conn.execute(f"DELETE FROM {table} WHERE {col} = $1::uuid", b.id)
+                    == "DELETE 0"
+                ), table
         finally:
             await tx.rollback()
             await conn.close()
