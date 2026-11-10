@@ -38,7 +38,7 @@ class AuthSession(Base):
 
 
 class AuthAttempt(Base):
-    """Rate-limit ledger. Not tenant data (no org): only ``attendify_system`` can touch it."""
+    """Rate-limit ledger. Not tenant data (no org): only the BYPASSRLS system role can touch it."""
 
     __tablename__ = "auth_attempts"
 
