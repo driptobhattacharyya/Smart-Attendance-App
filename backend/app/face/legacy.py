@@ -1,4 +1,7 @@
-"""Face providers: pluggable face enrolment + verification.
+"""LEGACY single-image providers (the original app/face.py), kept for the existing app.
+New code should use app.face.providers. Original docstring follows.
+
+Face providers: pluggable face enrolment + verification.
 
 ``FACE_PROVIDER=opencv`` (default) uses OpenCV's open-source models:
 
@@ -22,16 +25,10 @@ from typing import Any, NoReturn, Protocol
 
 import numpy as np
 
+from .errors import FaceError, FaceUnavailableError
+
 DETECTOR_FILE = "face_detection_yunet_2023mar.onnx"
 RECOGNIZER_FILE = "face_recognition_sface_2021dec.onnx"
-
-
-class FaceError(Exception):
-    """A user-facing problem with the submitted photo (no face, several faces...)."""
-
-
-class FaceUnavailableError(Exception):
-    """The face service could not be reached or rejected our credentials (maps to 503)."""
 
 
 class FaceProvider(Protocol):
