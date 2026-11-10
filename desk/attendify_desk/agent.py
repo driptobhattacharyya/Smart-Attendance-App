@@ -2,7 +2,8 @@
 
 `Agent.tick(now)` does whatever is due and never blocks for long, so it is easy to test
 with fake clocks. `run_forever` just calls it once a second from a worker thread.
-`now` is a monotonic time in seconds; wall-clock time is only used for "last sync".
+`now` is a monotonic time in seconds, used for scheduling only. The rotating beacon identity
+is derived from unix time (`unix_clock`) plus the clock skew learned from heartbeats.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from . import __version__
 from .activity import ActivityProbe
 from .advertiser import Advertiser, AdvertiserError, AdvStatus, BluetoothState
 from .api import ApiError, DeskApi, ServerUnreachable, Unpaired
-from .beacon import BeaconIdentity
+from .beacon import BeaconIdentity, rotating_ids, window_for
 from .config import Config, ConfigStore
 
 log = logging.getLogger(__name__)
@@ -29,12 +30,16 @@ BT_RETRY_SECONDS = 30.0
 ADV_BACKOFF_BASE = 5.0
 ADV_BACKOFF_CAP = 60.0
 PAUSE_SECONDS = 15 * 60
+SKEW_ALPHA = 0.2  # weight of each new heartbeat sample in the smoothed clock offset
+SKEW_OUTLIER_SECONDS = 3600.0  # a sample this far from the estimate is ignored...
+SKEW_RESYNC_AFTER = 3  # ...unless this many consecutive outliers agree (the clock really moved)
+SKEW_RESYNC_AGREE_SECONDS = 60.0
 
 
 @dataclass
 class AgentState:
     paired: bool = False
-    beacon: BeaconIdentity | None = None
+    beacon: BeaconIdentity | None = None  # the identity being broadcast this window
     beacon_name: str | None = None
     employee_name: str | None = None
     advertising: bool = False
@@ -57,6 +62,7 @@ class Agent:
         on_change: Callable[[], None] | None = None,
         on_unpaired: Callable[[], None] | None = None,
         wall_clock: Callable[[], dt.datetime] = dt.datetime.now,
+        unix_clock: Callable[[], float] = time.time,
     ):
         self.store = store
         self.api_factory = api_factory
@@ -65,6 +71,7 @@ class Agent:
         self.on_change = on_change or (lambda: None)
         self.on_unpaired = on_unpaired or (lambda: None)
         self.wall_clock = wall_clock
+        self.unix_clock = unix_clock
         self.state = AgentState()
         self._cfg = Config()
         self._api: DeskApi | None = None
@@ -72,6 +79,9 @@ class Agent:
         self._hb_failures = 0
         self._next_adv_attempt = 0.0
         self._adv_failures = 0
+        self._skew: float | None = None  # smoothed server_time - local time, seconds
+        self._skew_anchor: float | None = None
+        self._skew_rejects = 0
         self._stop = threading.Event()
         self._lock = threading.RLock()
 
@@ -83,7 +93,7 @@ class Agent:
             self._api = self.api_factory(self._cfg.server_url) if self._cfg.paired else None
             s = self.state
             s.paired = self._cfg.paired
-            s.beacon = self._cfg.beacon
+            s.beacon = None  # recomputed from the window on the next tick
             s.beacon_name = self._cfg.beacon_name
             s.employee_name = self._cfg.employee_name
             s.unpaired_reason = None
@@ -124,14 +134,62 @@ class Agent:
         finally:
             self.adv.stop()
 
+    # -- identity and clock ---------------------------------------------------------
+    @property
+    def clock_skew(self) -> float | None:
+        """Estimated server_time minus local time, in seconds (None until a heartbeat)."""
+        return self._skew
+
+    def current_window(self) -> int:
+        """The 5-minute window the server will expect us to be broadcasting in."""
+        return window_for(self.unix_clock() + (self._skew or 0.0))
+
+    def _identity_now(self) -> BeaconIdentity | None:
+        cfg = self._cfg
+        if not (cfg.secret and cfg.beacon_uuid):
+            return None
+        major, minor = rotating_ids(cfg.secret, self.current_window())
+        return BeaconIdentity(cfg.beacon_uuid, major, minor)
+
+    def _observe_skew(self, sample: float) -> None:
+        """Fold one heartbeat's clock offset into the estimate; reject lone wild samples."""
+        if self._skew is None:
+            self._skew = sample
+            return
+        if abs(sample - self._skew) <= SKEW_OUTLIER_SECONDS:
+            self._skew_anchor = None
+            self._skew_rejects = 0
+            self._skew += SKEW_ALPHA * (sample - self._skew)
+            return
+        # An outlier. A clock that really moved gives repeated, agreeing outliers: re-anchor then.
+        if self._skew_anchor is not None and (
+            abs(sample - self._skew_anchor) <= SKEW_RESYNC_AGREE_SECONDS
+        ):
+            self._skew_rejects += 1
+        else:
+            self._skew_anchor = sample
+            self._skew_rejects = 1
+        if self._skew_rejects >= SKEW_RESYNC_AFTER:
+            log.warning("Clock offset moved to %.0f s; re-anchoring", sample)
+            self._skew = sample
+            self._skew_anchor = None
+            self._skew_rejects = 0
+        else:
+            log.warning(
+                "Ignoring clock sample %.0f s from the current estimate (outlier)",
+                sample - self._skew,
+            )
+
     # -- the state machine -------------------------------------------------------------
     def tick(self, now: float) -> None:
         with self._lock:
             if not self.state.paired:
                 return
-            self._manage_advertising(now)
+            # Heartbeat first, so the clock skew is known before the window is chosen.
             if now >= self._next_heartbeat:
                 self._heartbeat(now)
+            if self.state.paired:
+                self._manage_advertising(now)
 
     def _paused(self, now: float) -> bool:
         s = self.state
@@ -147,7 +205,11 @@ class Agent:
 
     def _manage_advertising(self, now: float) -> None:
         s = self.state
-        if self._paused(now) or s.beacon is None:
+        identity = self._identity_now()
+        if identity is None:
+            return
+        s.beacon = identity  # changes at each window boundary
+        if self._paused(now):
             return
         status = self.adv.status()
         changed = False
@@ -160,9 +222,9 @@ class Agent:
             status = AdvStatus.STOPPED
         running = status in (AdvStatus.STARTED, AdvStatus.WAITING)
         current = self.adv.current
-        # Identity change (admin edited major/minor, or re-paired): restart.
-        if running and current is not None and current != s.beacon:
-            log.info("Beacon identity changed; restarting publisher")
+        # Window rolled over (or re-paired): the payload must change, so restart the publisher.
+        if running and current is not None and current != identity:
+            log.info("Identity window changed; restarting publisher")
             self.adv.stop()
             running = False
             self._next_adv_attempt = 0.0
@@ -250,10 +312,9 @@ class Agent:
         s.last_sync = self.wall_clock()
         interval = max(10, result.heartbeat_interval)
         self._next_heartbeat = now + interval
-        if result.beacon != s.beacon or interval != self._cfg.heartbeat_interval:
-            self.store.update_beacon(result.beacon, interval)
-            self._cfg.beacon = result.beacon
+        if result.server_unix is not None:
+            self._observe_skew(result.server_unix - self.unix_clock())
+        if interval != self._cfg.heartbeat_interval:
+            self.store.update_interval(interval)
             self._cfg.heartbeat_interval = interval
-            s.beacon = result.beacon  # _manage_advertising restarts the publisher next tick
-            self._next_adv_attempt = 0.0
         self.on_change()

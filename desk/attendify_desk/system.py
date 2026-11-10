@@ -78,12 +78,15 @@ def log_dir() -> Path:
 
 
 class _RedactTokens(logging.Filter):
-    """Belt and braces: never let a device token reach the log file."""
+    """Belt and braces: never let a device token or identity secret reach the log file."""
 
-    _pat = re.compile(r"adt_[A-Za-z0-9_\-]+")
+    _token = re.compile(r"adt_[A-Za-z0-9_\-]+")
+    # "secret": "<base64>", secret=<base64>, or a bare 32-byte base64 value after "secret"
+    _secret = re.compile(r"""(?i)(secret["']?\s*[:=]\s*["']?)[A-Za-z0-9+/]{20,}={0,2}""")
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = self._pat.sub("adt_***", str(record.getMessage()))
+        msg = self._token.sub("adt_***", str(record.getMessage()))
+        record.msg = self._secret.sub(r"\1***", msg)
         record.args = None
         return True
 

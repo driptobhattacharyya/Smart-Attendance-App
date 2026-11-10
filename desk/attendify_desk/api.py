@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import datetime as dt
+import logging
+import uuid as uuidlib
 from dataclasses import dataclass
 
 import httpx
 
-from .beacon import BeaconIdentity
+log = logging.getLogger(__name__)
+
+SECRET_BYTES = 32
 
 
 class ApiError(Exception):
@@ -25,19 +32,23 @@ class ServerUnreachable(ApiError):
     """Network failure or 5xx; retry later."""
 
 
-@dataclass
+@dataclass(repr=False)
 class PairResult:
     device_token: str
-    beacon: BeaconIdentity
+    secret: bytes  # never log this; it is the key for the rotating identity
+    beacon_uuid: str  # the org's desk UUID, lowercase
     beacon_name: str
     employee_name: str | None
     heartbeat_interval: int
 
+    def __repr__(self) -> str:  # keep secrets out of tracebacks and debug output
+        return f"PairResult(beacon_uuid={self.beacon_uuid!r}, beacon_name={self.beacon_name!r})"
+
 
 @dataclass
 class HeartbeatResult:
-    beacon: BeaconIdentity
     heartbeat_interval: int
+    server_unix: float | None  # the server's clock at the reply, for skew estimation
 
 
 class DeskApi:
@@ -68,14 +79,19 @@ class DeskApi:
             d = r.json()
             b = d["beacon"]
             emp = d.get("employee")
+            secret = base64.b64decode(d["secret"], validate=True)
+            if len(secret) != SECRET_BYTES:
+                raise ValueError("secret has the wrong length")
             return PairResult(
                 device_token=d["device_token"],
-                beacon=BeaconIdentity.from_json(b),
+                secret=secret,
+                beacon_uuid=str(uuidlib.UUID(str(b["uuid"]))),
                 beacon_name=b.get("name") or "this desk",
                 employee_name=emp.get("name") if emp else None,
                 heartbeat_interval=int(d.get("heartbeat_interval_seconds", 60)),
             )
-        except (KeyError, ValueError, TypeError, AttributeError) as exc:
+        except (KeyError, ValueError, TypeError, AttributeError, binascii.Error) as exc:
+            # Message only: the reply body may contain the secret.
             raise ApiError("Unexpected response from server") from exc
 
     def heartbeat(
@@ -101,9 +117,24 @@ class DeskApi:
             d = r.json()
             if d.get("paired") is False:
                 raise Unpaired("unpaired")
+            # major/minor are no longer sent (rotating identity); any "beacon" key is ignored.
             return HeartbeatResult(
-                beacon=BeaconIdentity.from_json(d["beacon"]),
                 heartbeat_interval=int(d.get("heartbeat_interval_seconds", 60)),
+                server_unix=_parse_server_time(d.get("server_time")),
             )
         except (KeyError, ValueError, TypeError, AttributeError) as exc:
             raise ApiError("Unexpected response from server") from exc
+
+
+def _parse_server_time(value: object) -> float | None:
+    """ISO-8601 UTC from the server. A missing or malformed value only disables skew correction."""
+    if not isinstance(value, str):
+        return None
+    try:
+        t = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        log.warning("Ignoring malformed server_time")
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=dt.UTC)
+    return t.timestamp()

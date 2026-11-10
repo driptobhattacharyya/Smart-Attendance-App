@@ -1,15 +1,22 @@
 import base64
+import hashlib
+import hmac
 
 import pytest
 
 from attendify_desk.beacon import (
     APPLE_COMPANY_ID,
-    BeaconIdentity,
     build_ibeacon_payload,
     full_manufacturer_data,
+    rotating_ids,
+    window_for,
 )
 
 UUID = "6a1f3c2e-8b4d-4e7a-9c2f-a7d1e5b3c901"
+
+# Rotating identity test vectors (also in desk/README.md).
+VECTOR_SECRET = bytes(range(32))  # base64: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+VECTORS = {0: (40716, 55737), 1: (50226, 57433), 5_000_000: (9808, 3354)}
 
 
 def parse_like_mobile(b64: str):
@@ -55,6 +62,31 @@ def test_rejects_out_of_range(major, minor, power):
         build_ibeacon_payload(UUID, major, minor, power)
 
 
-def test_identity_from_json_normalises_uuid():
-    b = BeaconIdentity.from_json({"uuid": UUID.upper(), "major": "3", "minor": 4})
-    assert b == BeaconIdentity(UUID, 3, 4)
+@pytest.mark.parametrize("window", sorted(VECTORS))
+def test_rotating_ids_known_vectors(window):
+    assert rotating_ids(VECTOR_SECRET, window) == VECTORS[window]
+
+
+@pytest.mark.parametrize("window", [0, 1, 5_000_000])
+def test_rotating_ids_follow_the_spec_formula(window):
+    # Independent computation straight from the spec, not via rotating_ids.
+    h = hmac.new(VECTOR_SECRET, window.to_bytes(8, "big"), hashlib.sha256).digest()
+    assert rotating_ids(VECTOR_SECRET, window) == (h[0] << 8 | h[1], h[2] << 8 | h[3])
+
+
+def test_rotating_ids_depend_on_secret_and_window():
+    other = bytes(31) + b"\x01"
+    assert rotating_ids(other, 1) != rotating_ids(VECTOR_SECRET, 1)
+    assert rotating_ids(VECTOR_SECRET, 1) != rotating_ids(VECTOR_SECRET, 2)
+
+
+def test_rotating_ids_rejects_negative_window():
+    with pytest.raises(ValueError):
+        rotating_ids(VECTOR_SECRET, -1)
+
+
+def test_window_boundaries():
+    assert window_for(0) == 0
+    assert window_for(299.999) == 0
+    assert window_for(300) == 1
+    assert window_for(1_800_000_000) == 6_000_000

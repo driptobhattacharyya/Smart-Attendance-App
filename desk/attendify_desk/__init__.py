@@ -2,4 +2,4 @@
 
 __version__ = "1.0.0"
 APP_NAME = "Attendify Desk"
-DEFAULT_SERVER_URL = "https://smartattendance.driptobhattacharyya.com/api"
+DEFAULT_SERVER_URL = "https://smartattendance.driptobhattacharyya.com/api/v1"
