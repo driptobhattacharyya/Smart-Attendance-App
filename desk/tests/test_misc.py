@@ -35,10 +35,14 @@ def test_version_info_matches():
     assert f"{__version__}.0".replace(".", ", ") in info
 
 
-def test_token_redacted_in_logs(tmp_path):
+def test_token_and_secret_redacted_in_logs(tmp_path):
     setup_logging(tmp_path)
+    secret = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
     logging.getLogger("x").warning("token adt_AbC-123_x leaked")
+    logging.getLogger("x").warning('pair reply {"secret": "%s"}', secret)
+    logging.getLogger("x").warning("config secret=%s", secret)
     for h in logging.getLogger().handlers:
         h.flush()
     text = (tmp_path / "attendify-desk.log").read_text()
     assert "adt_***" in text and not re.search(r"adt_AbC", text)
+    assert secret not in text and "***" in text

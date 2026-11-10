@@ -37,7 +37,8 @@ def pair_device(store: ConfigStore, api: DeskApi, raw_code: str) -> Config:
     cfg = Config(
         server_url=api.base_url,
         device_token=result.device_token,
-        beacon=result.beacon,
+        secret=result.secret,
+        beacon_uuid=result.beacon_uuid,
         beacon_name=result.beacon_name,
         employee_name=result.employee_name,
         heartbeat_interval=result.heartbeat_interval,
