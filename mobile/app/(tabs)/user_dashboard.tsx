@@ -18,6 +18,8 @@ import RequestForm from "@/components/request_form";
 import ConsentScreen from "@/components/ConsentScreen";
 import { API_CONFIG } from "@/lib/config";
 import { apiFetch } from "@/lib/api";
+import { fetchMyAttendance } from "@/lib/attendanceApi";
+import { isModuleOn } from "@/lib/profile";
 import { stopBackgroundTracking } from "@/lib/presence";
 import { AppContext } from "@/context/AppContext";
 
@@ -40,8 +42,9 @@ const UserDashboard = () => {
   if (!context) {
     throw new Error('UserDashboard must be used within an AppProvider');
   }
-  const { handleLogout, setConsentRequired, refreshStatus } = context;
-  const [name, setName] = useState("");
+  const { handleLogout, setConsentRequired, refreshStatus, profile, modules } = context;
+  const name = profile?.me.name ?? "";
+  const canRequest = ["regularization", "leave", "wfh"].some((m) => isModuleOn(modules, m as any));
   const [attendanceData, setAttendanceData] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<Summary>({
@@ -53,7 +56,7 @@ const UserDashboard = () => {
   const [isNoticeVisible, setIsNoticeVisible] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  const handleFormSubmit = () => {
+  const handleFormSubmit = (_body?: unknown) => {
     setIsModalVisible(false);
   };
 
@@ -109,7 +112,7 @@ const UserDashboard = () => {
     const fetchAttendanceData = async () => {
       try {
         // Last 30 days, worked out by the server from check-ins and approved requests.
-        const data = await apiFetch(API_CONFIG.ENDPOINTS.GET_ATTENDANCE);
+        const data = await fetchMyAttendance();
         const records: AttendanceRecord[] = data.days
           .filter((day: any) => day.total_minutes > 0)
           .map((day: any) => ({
@@ -133,7 +136,6 @@ const UserDashboard = () => {
           daysPresent,
         });
 
-        setName(data.name);
         setLoading(false);
       } catch (error) {
         console.error("Error fetching attendance data:", error);
@@ -191,12 +193,14 @@ const UserDashboard = () => {
           <Text style={styles.logoutText}>Log Out</Text>
         </TouchableOpacity>
       </View>
-      <TouchableOpacity
-        style={styles.requestButton}
-        onPress={() => setIsModalVisible(true)}
-      >
-        <Text style={styles.requestButtonText}>Request Manual Attendance</Text>
-      </TouchableOpacity>
+      {canRequest && (
+        <TouchableOpacity
+          style={styles.requestButton}
+          onPress={() => setIsModalVisible(true)}
+        >
+          <Text style={styles.requestButtonText}>Request Manual Attendance</Text>
+        </TouchableOpacity>
+      )}
       <Text style={styles.date}>
         Today: {new Date().toISOString().split("T")[0]}
       </Text>

@@ -4,39 +4,53 @@ import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import * as SecureStore from "expo-secure-store";
 import {
-  apiFetch,
-  BEACONS_KEY,
   clearSession,
+  DESK_DEVICES_KEY,
+  getRefreshToken,
   HEARTBEAT_INTERVAL_KEY,
   isConsentRequiredError,
-  SECURE_BACKGROUND_OPTIONS,
+  isNetworkError,
+  loadJson,
+  newIdempotencyKey,
+  PROFILE_CACHE_KEY,
+  revokeSession,
+  setAuthLostListener,
   setConsentRequiredListener,
-  storeConsentRequired,
-  storeFaceEnrolled,
+  storeJson,
+  apiFetch,
 } from "@/lib/api";
 import { API_CONFIG } from "@/lib/config";
+import {
+  buildCheckInBody,
+  buildCheckOutBody,
+  checkIn as postCheckIn,
+  checkOut as postCheckOut,
+  fetchStatus,
+  PresenceState,
+  SessionOut,
+} from "@/lib/attendanceApi";
+import { collectTrust } from "@/lib/collectTrust";
 import { hasBlePermissions, isBluetoothOn, requestBlePermissions, startBeaconScan } from "@/lib/ble";
 import {
   Beacon,
   beaconStatus,
-  bestReadings,
   BeaconReading,
+  DeskDeviceDto,
   latestForBeacon,
+  normalizeDeskDevices,
   pruneSightings,
+  readingsForDevices,
   Sighting,
 } from "@/lib/beacons";
 import {
   DEFAULT_HEARTBEAT_SECONDS,
   getLocationPermissionState,
   LocationPermissionState,
-  PresenceState,
   sendHeartbeat,
-  SessionOut,
   startBackgroundTracking,
   stopBackgroundTracking,
 } from "@/lib/presence";
-
-export type Coords = { latitude: number; longitude: number; accuracy?: number | null };
+import { hasPermission, isModuleOn, loadProfile, Modules, Office, Profile } from "@/lib/profile";
 
 export type Session = SessionOut;
 
@@ -44,11 +58,12 @@ export type BleStatus = "idle" | "scanning" | "no-permission" | "bluetooth-off" 
 
 interface AppContextType {
   isInsideGeofence: boolean;
+  /** True once the face check passed (or when the organisation has switched the face module off). */
   isFaceScanned: boolean;
   setIsFaceScanned: React.Dispatch<React.SetStateAction<boolean>>;
   /** Called by the location watcher with each new position. */
-  handleEntry: (coords: Coords) => void;
-  handleExit: (coords: Coords) => void;
+  handleEntry: (position: Location.LocationObject) => void;
+  handleExit: (position: Location.LocationObject) => void;
   /** Server-side attendance state */
   isCheckedIn: boolean;
   openSession: Session | null;
@@ -57,7 +72,7 @@ interface AppContextType {
   presence: PresenceState | null;
   attendanceMessage: string | null;
   refreshStatus: () => Promise<void>;
-  /** Beacons assigned to me (GET /beacons/mine). */
+  /** Desk devices the phone scans for (GET /places/desk-devices/mine); empty when proximity is off. */
   beacons: Beacon[];
   /** Beacon advertisements heard in the last ~30 s. */
   sightings: Sighting[];
@@ -70,7 +85,13 @@ interface AppContextType {
   locationPermissions: LocationPermissionState;
   refreshLocationPermissions: () => Promise<void>;
   isLoggedIn: boolean;
-  setIsLoggedIn: React.Dispatch<React.SetStateAction<boolean>>;
+  /** Load the profile after tokens were saved (login / invite) and enter the app. */
+  startSession: () => Promise<void>;
+  /** Try to resume a saved session at app start. Resolves when the app can show a screen. */
+  restoreSession: () => Promise<void>;
+  /** Set when the session ended on its own (refresh failed); shown on the login screen. */
+  authNotice: string | null;
+  clearAuthNotice: () => void;
   /**
    * True while the logged-in user has not accepted the current privacy notice. Nothing
    * that uses location, Bluetooth or the camera runs while it is true.
@@ -80,6 +101,18 @@ interface AppContextType {
   /** False until the user has enrolled a face; the app shows the enrolment screen until then. */
   faceEnrolled: boolean;
   setFaceEnrolled: (enrolled: boolean) => void;
+  profile: Profile | null;
+  modules: Modules;
+  office: Office | null;
+  can: (permission: string) => boolean;
+  /** Module switches (organisation settings). */
+  faceRequired: boolean;
+  proximityEnabled: boolean;
+  wfhEnabled: boolean;
+  geofenceEnabled: boolean;
+  /** The user asked to work remotely today (module wfh): face check, then a remote check-in. */
+  remoteRequested: boolean;
+  setRemoteRequested: (requested: boolean) => void;
   handleLogout: () => Promise<void>;
 }
 
@@ -87,25 +120,37 @@ export const AppContext = createContext<AppContextType>(undefined as unknown as 
 
 const SIGHTINGS_FLUSH_MS = 1000;
 
+/** Server codes meaning "do the face check again". */
+const FACE_AGAIN_CODES = ["face_required", "face_verification_required", "face_expired"];
+
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const router = useRouter();
   const [isInsideGeofence, setIsInsideGeofence] = useState(false);
-  const [isFaceScanned, setIsFaceScanned] = useState(false);
+  const [faceScanned, setIsFaceScanned] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [consentRequired, setConsentRequiredState] = useState(false);
   const [faceEnrolled, setFaceEnrolledState] = useState(false);
+  const [remoteRequested, setRemoteRequested] = useState(false);
 
-  const updateConsent = useCallback((required: boolean) => {
-    setConsentRequiredState(required);
-    storeConsentRequired(required);
-  }, []);
+  const modules: Modules = profile?.modules ?? {};
+  const faceRequired = isModuleOn(modules, "face");
+  const proximityEnabled = isModuleOn(modules, "proximity");
+  const wfhEnabled = isModuleOn(modules, "wfh");
+  const geofenceEnabled = isModuleOn(modules, "geofence");
+  const office = profile?.office ?? null;
+  const isFaceScanned = faceScanned || !faceRequired;
 
-  const updateFaceEnrolled = useCallback((enrolled: boolean) => {
-    setFaceEnrolledState(enrolled);
-    storeFaceEnrolled(enrolled);
-  }, []);
+  const updateConsent = useCallback((required: boolean) => setConsentRequiredState(required), []);
+  const updateFaceEnrolled = useCallback((enrolled: boolean) => setFaceEnrolledState(enrolled), []);
 
-  // Any 403 "Consent required" from the API reopens the consent screen.
+  // Keep a copy of the profile for starting up offline.
+  useEffect(() => {
+    if (isLoggedIn && profile) storeJson(PROFILE_CACHE_KEY, { ...profile, consentRequired, faceEnrolled });
+  }, [isLoggedIn, profile, consentRequired, faceEnrolled]);
+
+  // Any 403 consent_required from the API reopens the consent screen.
   useEffect(() => {
     setConsentRequiredListener(() => updateConsent(true));
     return () => setConsentRequiredListener(null);
@@ -127,22 +172,100 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     background: false,
   });
 
-  const lastCoords = useRef<Coords | null>(null);
+  const lastPosition = useRef<Location.LocationObject | null>(null);
   const busy = useRef(false);
   const sightingsRef = useRef<Sighting[]>([]);
+  const beaconsRef = useRef<Beacon[]>([]);
+  beaconsRef.current = beacons;
   const heartbeatSecondsRef = useRef(heartbeatSeconds);
   heartbeatSecondsRef.current = heartbeatSeconds;
+
+  // ---- session start / restore / end -------------------------------------
+
+  const applyProfile = useCallback((p: Profile) => {
+    setProfile(p);
+    setConsentRequiredState(p.consentRequired);
+    setFaceEnrolledState(p.faceEnrolled);
+  }, []);
+
+  const startSession = useCallback(async () => {
+    try {
+      applyProfile(await loadProfile(false));
+      setAuthNotice(null);
+      setIsLoggedIn(true);
+    } catch (error) {
+      await clearSession();
+      throw error;
+    }
+  }, [applyProfile]);
+
+  const restoreSession = useCallback(async () => {
+    if (!(await getRefreshToken())) {
+      setIsLoggedIn(false);
+      return;
+    }
+    const cached = await loadJson<Profile>(PROFILE_CACHE_KEY);
+    try {
+      applyProfile(await loadProfile(Boolean(cached?.faceEnrolled)));
+      setIsLoggedIn(true);
+    } catch (error) {
+      // Offline (or the server is down): keep the user signed in with the last known profile.
+      // If the session itself ended, the auth-lost listener has already shown the login screen.
+      const offline = isNetworkError(error) || (error as any)?.status >= 500;
+      if (offline && cached?.me) {
+        applyProfile(cached);
+        setIsLoggedIn(true);
+      } else {
+        setIsLoggedIn(false);
+      }
+    }
+  }, [applyProfile]);
+
+  const resetState = useCallback(async () => {
+    await stopBackgroundTracking();
+    setIsLoggedIn(false);
+    setProfile(null);
+    setConsentRequiredState(false);
+    setFaceEnrolledState(false);
+    setIsFaceScanned(false);
+    setRemoteRequested(false);
+    setIsInsideGeofence(false);
+    setOpenSession(null);
+    setTodayMinutes(0);
+    setPresence(null);
+    setBeacons([]);
+    setSightings([]);
+    sightingsRef.current = [];
+    lastPosition.current = null;
+  }, []);
+
+  // The refresh token no longer works: back to the login screen with a message.
+  useEffect(() => {
+    setAuthLostListener((message) => {
+      setAuthNotice(message);
+      clearSession().catch(() => {});
+      resetState().then(() => setTimeout(() => router.replace("/"), 0));
+    });
+    return () => setAuthLostListener(null);
+  }, [resetState, router]);
+
+  const handleLogout = async () => {
+    await stopBackgroundTracking();
+    await revokeSession(); // POST /auth/logout, then wipe the local tokens and caches
+    await resetState();
+    setTimeout(() => router.replace("/"), 0);
+  };
 
   // ---- attendance status -------------------------------------------------
 
   const refreshStatus = useCallback(async () => {
     try {
-      const status = await apiFetch(API_CONFIG.ENDPOINTS.ATTENDANCE_STATUS);
+      const status = await fetchStatus();
       setOpenSession(status.session);
       setTodayMinutes(status.today_minutes);
       setIsFaceScanned(Boolean(status.face_verified_until));
       setPresence(status.session ? (status.presence ?? status.session.state ?? null) : null);
-      if (status.heartbeat_interval_seconds > 0) {
+      if (status.heartbeat_interval_seconds && status.heartbeat_interval_seconds > 0) {
         setHeartbeatSeconds(status.heartbeat_interval_seconds);
         SecureStore.setItemAsync(HEARTBEAT_INTERVAL_KEY, String(status.heartbeat_interval_seconds)).catch(() => {});
       }
@@ -152,8 +275,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, []);
 
   useEffect(() => {
-    if (isLoggedIn) refreshStatus();
-  }, [isLoggedIn, refreshStatus]);
+    if (isLoggedIn && !consentRequired) refreshStatus();
+  }, [isLoggedIn, consentRequired, refreshStatus]);
 
   // Catch up with the server when returning from the background (the background task
   // may have changed or closed the session meanwhile).
@@ -169,33 +292,36 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoggedIn, refreshStatus]);
 
-  // ---- my beacons --------------------------------------------------------
+  // ---- desk devices to scan for -------------------------------------------
 
   useEffect(() => {
-    if (!isLoggedIn) return;
+    if (!isLoggedIn || !profile) return;
     let cancelled = false;
     (async () => {
+      if (!proximityEnabled) {
+        // Module off: nothing is scanned or sent, and the background task sees an empty list.
+        setBeacons([]);
+        await storeJson(DESK_DEVICES_KEY, []);
+        return;
+      }
       try {
-        const mine: Beacon[] = await apiFetch(API_CONFIG.ENDPOINTS.MY_BEACONS);
+        const mine = normalizeDeskDevices(await apiFetch<DeskDeviceDto[]>(API_CONFIG.ENDPOINTS.DESK_DEVICES_MINE));
         if (cancelled) return;
         setBeacons(mine);
-        // The background task has no React state; it reads the beacons from here.
-        await SecureStore.setItemAsync(BEACONS_KEY, JSON.stringify(mine), SECURE_BACKGROUND_OPTIONS);
+        // The background task has no React state; it reads the devices from here.
+        await storeJson(DESK_DEVICES_KEY, mine);
       } catch (error) {
-        console.warn("Could not load beacons", error);
-        // Offline: fall back to the copy from the last login.
-        try {
-          const saved = await SecureStore.getItemAsync(BEACONS_KEY);
-          if (saved && !cancelled) setBeacons(JSON.parse(saved));
-        } catch {
-          /* ignore */
-        }
+        if (isConsentRequiredError(error)) return;
+        console.warn("Could not load desk devices", error);
+        // Offline: fall back to the copy from the last time.
+        const saved = await loadJson<Beacon[]>(DESK_DEVICES_KEY);
+        if (saved && !cancelled) setBeacons(saved);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [isLoggedIn]);
+  }, [isLoggedIn, profile, proximityEnabled]);
 
   // ---- BLE scanning (foreground) ----------------------------------------
 
@@ -264,8 +390,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return beacons.some((b) => beaconStatus(latestForBeacon(b, sightings, now)) === "near");
   }, [beacons, sightings]);
 
-  /** Best RSSI per beacon over the last ~30 s, in the shape the API wants. */
-  const currentReadings = useCallback((): BeaconReading[] => bestReadings(sightingsRef.current, Date.now()), []);
+  /**
+   * Best RSSI per beacon identity over the last ~30 s, only for identities that match one of
+   * my desk devices (null major/minor = wildcard, for rotating desk apps).
+   */
+  const currentReadings = useCallback(
+    (): BeaconReading[] => readingsForDevices(sightingsRef.current, beaconsRef.current, Date.now()),
+    []
+  );
 
   // ---- location permissions & background tracking -------------------------
 
@@ -300,38 +432,50 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // ---- check-in / check-out ---------------------------------------------
 
-  const checkIn = useCallback(async () => {
-    const coords = lastCoords.current;
-    if (!coords || busy.current) return;
-    busy.current = true;
+  /** A fresh fix if the GPS answers, else the last one the geofence watcher saw. */
+  const currentPosition = useCallback(async (): Promise<Location.LocationObject | null> => {
     try {
-      await apiFetch(API_CONFIG.ENDPOINTS.CHECK_IN, {
-        json: {
-          latitude: coords.latitude,
-          longitude: coords.longitude,
-          accuracy: coords.accuracy ?? null,
-          beacons: currentReadings(),
-        },
-      });
-      setAttendanceMessage("Checked in");
-    } catch (error: any) {
-      // A consent error reopens the consent screen (see the listener above); no alert needed.
-      if (!isConsentRequiredError(error)) setAttendanceMessage(error.message);
-      if (error.status === 403) setIsFaceScanned(false);
-    } finally {
-      busy.current = false;
-      refreshStatus();
+      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      lastPosition.current = position;
+      return position;
+    } catch {
+      return lastPosition.current;
     }
-  }, [currentReadings, refreshStatus]);
+  }, []);
+
+  const checkIn = useCallback(
+    async (mode: "onsite" | "remote") => {
+      if (busy.current) return;
+      busy.current = true;
+      try {
+        const position = await currentPosition();
+        if (!position) {
+          setAttendanceMessage("Could not get your location. Turn on location services and try again.");
+          return;
+        }
+        const trust = await collectTrust(position);
+        // One key per attempt: the HTTP client reuses it if it has to retry.
+        await postCheckIn(buildCheckInBody({ trust, beacons: currentReadings(), mode }), newIdempotencyKey());
+        setAttendanceMessage("Checked in");
+      } catch (error: any) {
+        // A consent error reopens the consent screen (see the listener above); no alert needed.
+        if (!isConsentRequiredError(error)) setAttendanceMessage(error.message);
+        if (FACE_AGAIN_CODES.includes(error?.code)) setIsFaceScanned(false);
+      } finally {
+        busy.current = false;
+        refreshStatus();
+      }
+    },
+    [currentPosition, currentReadings, refreshStatus]
+  );
 
   const checkOut = useCallback(async () => {
     if (busy.current) return;
     busy.current = true;
     try {
-      const coords = lastCoords.current;
-      await apiFetch(API_CONFIG.ENDPOINTS.CHECK_OUT, {
-        json: coords ? { latitude: coords.latitude, longitude: coords.longitude } : {},
-      });
+      const position = lastPosition.current;
+      const trust = position ? await collectTrust(position) : null;
+      await postCheckOut(buildCheckOutBody(trust), newIdempotencyKey());
       setAttendanceMessage("Checked out");
     } catch (error: any) {
       setAttendanceMessage(error.message);
@@ -342,11 +486,36 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [refreshStatus]);
 
   // The server decides; the app only asks at the right moments.
+  const isRemoteSession = openSession?.mode === "remote";
+  const effectivelyInside = !geofenceEnabled || isInsideGeofence;
   useEffect(() => {
-    if (!isLoggedIn || consentRequired) return;
-    if (isInsideGeofence && isFaceScanned && !openSession) checkIn();
-    if (!isInsideGeofence && openSession && openSession.source === "app") checkOut();
-  }, [isLoggedIn, consentRequired, isInsideGeofence, isFaceScanned, openSession, checkIn, checkOut]);
+    if (!isLoggedIn || consentRequired || !profile) return;
+    if (!openSession && isFaceScanned) {
+      if (remoteRequested) checkIn("remote");
+      else if (effectivelyInside) checkIn("onsite");
+    }
+    if (geofenceEnabled && !isInsideGeofence && openSession && openSession.source === "app" && !isRemoteSession) {
+      checkOut();
+    }
+  }, [
+    isLoggedIn,
+    consentRequired,
+    profile,
+    geofenceEnabled,
+    isInsideGeofence,
+    effectivelyInside,
+    isFaceScanned,
+    remoteRequested,
+    openSession,
+    isRemoteSession,
+    checkIn,
+    checkOut,
+  ]);
+
+  // A remote day is over once the session is closed.
+  useEffect(() => {
+    if (remoteRequested && !openSession && attendanceMessage === "Checked out") setRemoteRequested(false);
+  }, [remoteRequested, openSession, attendanceMessage]);
 
   // ---- foreground heartbeats --------------------------------------------
 
@@ -360,20 +529,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const tick = async () => {
       let nextSeconds = heartbeatSecondsRef.current;
       try {
-        let coords: Coords | null = lastCoords.current;
-        try {
-          const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          coords = {
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-            accuracy: position.coords.accuracy,
-          };
-          lastCoords.current = coords;
-        } catch {
-          // fall back to the last position the geofence watcher saw
-        }
-        if (coords && !cancelled) {
-          const result = await sendHeartbeat(coords, currentReadings());
+        const position = await currentPosition();
+        if (position && !cancelled) {
+          const result = await sendHeartbeat(position, currentReadings());
           if (cancelled) return;
           if (result.next_heartbeat_seconds > 0) nextSeconds = result.next_heartbeat_seconds;
           setPresence(result.checked_in ? result.state : null);
@@ -400,6 +558,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           refreshStatus();
           return;
         }
+        if (error?.code === "session_expired") return; // the auth-lost listener takes over
         console.warn("Heartbeat failed", error);
       }
       if (!cancelled) timer = setTimeout(tick, nextSeconds * 1000);
@@ -410,37 +569,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [isLoggedIn, consentRequired, sessionId, currentReadings, refreshStatus]);
+  }, [isLoggedIn, consentRequired, sessionId, currentPosition, currentReadings, refreshStatus]);
 
-  // ---- geofence callbacks & logout ----------------------------------------
+  // ---- geofence callbacks ---------------------------------------------------
 
-  const handleEntry = useCallback((coords: Coords) => {
-    lastCoords.current = coords;
+  const handleEntry = useCallback((position: Location.LocationObject) => {
+    lastPosition.current = position;
     setIsInsideGeofence(true);
   }, []);
 
-  const handleExit = useCallback((coords: Coords) => {
-    lastCoords.current = coords;
+  const handleExit = useCallback((position: Location.LocationObject) => {
+    lastPosition.current = position;
     setIsInsideGeofence(false);
     setIsFaceScanned(false);
   }, []);
-
-  const handleLogout = async () => {
-    await stopBackgroundTracking();
-    await clearSession();
-    setIsLoggedIn(false);
-    setConsentRequiredState(false);
-    setFaceEnrolledState(false);
-    setIsFaceScanned(false);
-    setIsInsideGeofence(false);
-    setOpenSession(null);
-    setTodayMinutes(0);
-    setPresence(null);
-    setBeacons([]);
-    setSightings([]);
-    sightingsRef.current = [];
-    setTimeout(() => router.replace("/"), 0);
-  };
 
   useEffect(() => {
     if (attendanceMessage && !["Checked in", "Checked out"].includes(attendanceMessage)) {
@@ -448,10 +590,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [attendanceMessage]);
 
+  const can = useCallback((permission: string) => hasPermission(profile?.me, permission), [profile]);
+
   return (
     <AppContext.Provider
       value={{
-        isInsideGeofence,
+        isInsideGeofence: effectivelyInside,
         isFaceScanned,
         setIsFaceScanned,
         handleEntry,
@@ -471,11 +615,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         locationPermissions,
         refreshLocationPermissions,
         isLoggedIn,
-        setIsLoggedIn,
+        startSession,
+        restoreSession,
+        authNotice,
+        clearAuthNotice: () => setAuthNotice(null),
         consentRequired,
         setConsentRequired: updateConsent,
         faceEnrolled,
         setFaceEnrolled: updateFaceEnrolled,
+        profile,
+        modules,
+        office,
+        can,
+        faceRequired,
+        proximityEnabled,
+        wfhEnabled,
+        geofenceEnabled,
+        remoteRequested,
+        setRemoteRequested,
         handleLogout,
       }}
     >

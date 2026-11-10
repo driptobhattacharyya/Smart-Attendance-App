@@ -1,9 +1,7 @@
 import React, { useContext, useEffect, useRef, useState } from "react";
 import { Text, View, StyleSheet, FlatList } from "react-native";
 import { AppContext, Session } from "@/context/AppContext";
-import { apiFetch } from "@/lib/api";
-import { API_CONFIG } from "@/lib/config";
-import { PresenceState } from "@/lib/presence";
+import { fetchMyAttendance, PresenceState } from "@/lib/attendanceApi";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const todayLocal = () => {
@@ -43,8 +41,8 @@ const Timer = () => {
   // Reload today's sessions whenever the check-in state or worked time changes.
   useEffect(() => {
     const today = todayLocal();
-    apiFetch(`${API_CONFIG.ENDPOINTS.GET_ATTENDANCE}?start=${today}&end=${today}`)
-      .then((report) => setSessions(report.days[0]?.sessions ?? []))
+    fetchMyAttendance({ start: today, end: today })
+      .then((report) => setSessions((report.days[0]?.sessions ?? []) as Session[]))
       .catch((error) => console.warn("Could not load today's sessions", error));
   }, [openSession?.id, todayMinutes, presence]);
 

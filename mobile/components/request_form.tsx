@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useContext, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -10,8 +10,19 @@ import {
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { Alert } from "react-native";
-import { apiFetch } from "@/lib/api";
-import { API_CONFIG } from "@/lib/config";
+import { AppContext } from "@/context/AppContext";
+import { errorMessage } from "@/lib/errors";
+import { ModuleKey, isModuleOn } from "@/lib/profile";
+import { RequestBody, RequestKind, submitRequest } from "@/lib/attendanceApi";
+
+/** What the employee can ask for. Each reason maps to a request kind and needs its module. */
+const REASONS: { label: string; kind: RequestKind; module: ModuleKey }[] = [
+  { label: "Work from home", kind: "wfh", module: "wfh" },
+  { label: "Off-Campus duty", kind: "correction", module: "regularization" },
+  { label: "Forgot to check-in", kind: "correction", module: "regularization" },
+  { label: "Leave", kind: "leave", module: "leave" },
+  { label: "Other", kind: "correction", module: "regularization" },
+];
 
 // YYYY-MM-DD and HH:MM in the phone's own timezone (toISOString would use UTC).
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -24,10 +35,12 @@ import { Ionicons } from "@expo/vector-icons"; // Import icons
 type RequestFormProps = {
   isVisible: boolean;
   onClose: () => void;
-  onSubmit?: (body: Record<string, string>) => void;
+  onSubmit?: (body: RequestBody) => void;
 };
 
 const RequestForm = ({ isVisible, onClose, onSubmit }: RequestFormProps) => {
+  const { modules } = useContext(AppContext);
+  const reasons = useMemo(() => REASONS.filter((r) => isModuleOn(modules, r.module)), [modules]);
   const [reason, setReason] = useState("");
   const [entryTime, setEntryTime] = useState(new Date());
   const [exitTime, setExitTime] = useState(new Date());
@@ -41,6 +54,7 @@ const RequestForm = ({ isVisible, onClose, onSubmit }: RequestFormProps) => {
   const [isMultipleDays, setIsMultipleDays] = useState(false); // Single or Multiple Days
   const [isOtherReason, setIsOtherReason] = useState(false); // Other reason toggle
   const [description, setDescription] = useState("");
+  const [otherText, setOtherText] = useState("");
 
   const handleTimeChange = (type: "entry" | "exit", event: unknown, selectedTime?: Date) => {
     if (selectedTime) {
@@ -78,30 +92,37 @@ const RequestForm = ({ isVisible, onClose, onSubmit }: RequestFormProps) => {
   };
 
   const handleSubmit = async () => {
-    const finalReason = isOtherReason ? description.trim() : reason;
+    const chosen = isOtherReason ? "Other" : reason || reasons[0]?.label;
+    const kind = reasons.find((r) => r.label === chosen)?.kind;
+    if (!kind) {
+      Alert.alert("Not available", "Your company has not enabled requests.");
+      return;
+    }
+    const finalReason = isOtherReason ? otherText.trim() : chosen;
     if (!finalReason || finalReason.length < 3) {
       Alert.alert("Missing reason", "Please choose or describe a reason.");
       return;
     }
     const start = localDate(startDate);
     const end = isMultipleDays ? localDate(endDate) : start;
-    const body: Record<string, string> = {
+    const body: RequestBody = {
+      kind,
       reason: description && !isOtherReason ? `${finalReason}: ${description}` : finalReason,
       start_date: start,
       end_date: end,
     };
-    if (!isMultipleDays) {
+    if (!isMultipleDays && kind === "correction") {
       // A single day with times becomes an attendance correction once approved.
       body.entry_time = localTime(entryTime);
       body.exit_time = localTime(exitTime);
     }
     try {
-      await apiFetch(API_CONFIG.ENDPOINTS.SUBMIT_REQUEST, { json: body });
+      await submitRequest(body);
       Alert.alert("Sent", "Your request was sent to your manager.");
       onSubmit?.(body);
       onClose();
     } catch (error: any) {
-      Alert.alert("Could not send request", error.message || "Please try again.");
+      Alert.alert("Could not send request", errorMessage(error, "Please try again."));
     }
   };
 
@@ -113,17 +134,16 @@ const RequestForm = ({ isVisible, onClose, onSubmit }: RequestFormProps) => {
         {/* Reason Dropdown */}
         <Text style={styles.label}>Reason for absence:</Text>
         <Picker
-          selectedValue={reason}
+          selectedValue={reason || reasons[0]?.label}
           style={styles.picker}
           onValueChange={(itemValue) => {
             setReason(itemValue);
             setIsOtherReason(itemValue === "Other");
           }}
         >
-          <Picker.Item label="Work from home" value="Work from home" />
-          <Picker.Item label="Off-Campus duty" value="Off-Campus duty" />
-          <Picker.Item label="Forgot to check-in" value="Forgot to check-in" />
-          <Picker.Item label="Other" value="Other" />
+          {reasons.map((r) => (
+            <Picker.Item key={r.label} label={r.label} value={r.label} />
+          ))}
         </Picker>
 
         {/* Show Text Input if "Other" is selected */}
@@ -131,8 +151,8 @@ const RequestForm = ({ isVisible, onClose, onSubmit }: RequestFormProps) => {
           <TextInput
             placeholder="Please specify"
             style={styles.input}
-            value={reason}
-            onChangeText={setReason}
+            value={otherText}
+            onChangeText={setOtherText}
           />
         )}
 

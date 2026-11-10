@@ -1,7 +1,7 @@
-import React, { useContext, useEffect } from 'react';
-import { View, StyleSheet } from 'react-native';
-import LoginPage from '../components/login_page';
-import { useRouter } from 'expo-router';
+import React, { useContext, useEffect } from "react";
+import { View, StyleSheet } from "react-native";
+import LoginPage from "../components/login_page";
+import { useRouter } from "expo-router";
 import { AppContext } from "@/context/AppContext";
 
 export default function IndexPage() {
@@ -10,20 +10,12 @@ export default function IndexPage() {
 
   // If user is logged in, redirect to dashboard
   useEffect(() => {
-    const checkAuth = async () => {
-      if (context?.isLoggedIn) {
-        router.replace('/(tabs)/user_dashboard');
-      }
-    };
-    checkAuth();
+    if (context?.isLoggedIn) router.replace("/(tabs)/user_dashboard");
   }, [context?.isLoggedIn]);
 
-  // Always show login page if not logged in
   return (
     <View style={styles.container}>
-      <LoginPage 
-        onSignupPress={() => router.push('/signup')}
-      />
+      <LoginPage onInvitePress={() => router.push("/invite")} onForgotPress={() => router.push("/forgot-password")} />
     </View>
   );
 }
@@ -31,6 +23,6 @@ export default function IndexPage() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
-}); 
+});

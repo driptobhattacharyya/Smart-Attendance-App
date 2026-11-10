@@ -4,6 +4,8 @@ import {
   bestReadings,
   latestForBeacon,
   matchesBeacon,
+  normalizeDeskDevices,
+  readingsForDevices,
   parseIBeacon,
   Beacon,
   Sighting,
@@ -132,5 +134,68 @@ describe("beaconStatus / latestForBeacon", () => {
     expect(found?.rssi).toBe(-60);
     expect(latestForBeacon(beacon(), [sighting(-60, 40_000)], now)).toBeNull();
     expect(latestForBeacon(beacon({ major: 7 }), [sighting(-60, 1000)], now)).toBeNull();
+  });
+});
+
+describe("desk devices (rotating identities)", () => {
+  const DESK_UUID = "11111111-2222-3333-4444-555555555555";
+  const desk = beacon({ id: "d1", kind: "desk_app", uuid: DESK_UUID, major: null, minor: null });
+  const tag = beacon({ id: "t1", kind: "tag", major: 1, minor: 2 });
+  const heard = (uuid: string, major: number, minor: number, rssi: number, seenAt: number): Sighting => ({
+    uuid,
+    major,
+    minor,
+    rssi,
+    seenAt,
+  });
+
+  it("treats null major/minor as a wildcard for any rotating value", () => {
+    expect(matchesBeacon({ uuid: DESK_UUID, major: 40716, minor: 55737 }, desk)).toBe(true);
+    expect(matchesBeacon({ uuid: DESK_UUID.toUpperCase(), major: 1, minor: 2 }, desk)).toBe(true);
+    expect(matchesBeacon({ uuid: UUID, major: 40716, minor: 55737 }, desk)).toBe(false);
+  });
+
+  it("a wildcard on one side still checks the other", () => {
+    const half = beacon({ major: 7, minor: null });
+    expect(matchesBeacon({ uuid: UUID, major: 7, minor: 9 }, half)).toBe(true);
+    expect(matchesBeacon({ uuid: UUID, major: 8, minor: 9 }, half)).toBe(false);
+  });
+
+  it("forwards every reading whose UUID matches a desk device, whatever its major/minor", () => {
+    const now = 100_000;
+    const sightings = [
+      heard(DESK_UUID, 40716, 55737, -70, now - 1000), // current window
+      heard(DESK_UUID, 50226, 57433, -75, now - 2000), // neighbouring window
+      heard(DESK_UUID, 40716, 55737, -60, now - 500), // same identity, stronger
+      heard(UUID, 1, 2, -50, now - 500), // my tag
+      heard(UUID, 9, 9, -50, now - 500), // someone else's tag: same UUID, other major/minor
+      heard("99999999-0000-0000-0000-000000000000", 1, 1, -40, now - 500), // unrelated beacon
+    ];
+    const readings = readingsForDevices(sightings, [desk, tag], now);
+    expect(readings).toHaveLength(3);
+    expect(readings).toEqual(
+      expect.arrayContaining([
+        { uuid: DESK_UUID, major: 40716, minor: 55737, rssi: -60 },
+        { uuid: DESK_UUID, major: 50226, minor: 57433, rssi: -75 },
+        { uuid: UUID, major: 1, minor: 2, rssi: -50 },
+      ])
+    );
+  });
+
+  it("sends nothing when there are no devices or the readings are old", () => {
+    expect(readingsForDevices([heard(DESK_UUID, 1, 1, -50, 0)], [], 1000)).toEqual([]);
+    expect(readingsForDevices([heard(DESK_UUID, 1, 1, -50, 0)], [desk], 1_000_000)).toEqual([]);
+  });
+
+  it("normalises GET /places/desk-devices/mine", () => {
+    const devices = normalizeDeskDevices([
+      { id: "a", kind: "desk_app", name: "Dana's desk", ibeacon_uuid: DESK_UUID.toUpperCase(), major: null, minor: null },
+      { id: "b", kind: "tag", name: "Tag", ibeacon_uuid: UUID, major: 3, minor: 4, active: true },
+      { id: "c", kind: "tag", name: "Off", ibeacon_uuid: UUID, major: 3, minor: 4, active: false },
+      { id: "d", kind: "desk_app", name: "No uuid", ibeacon_uuid: null },
+    ]);
+    expect(devices.map((d) => d.id)).toEqual(["a", "b"]);
+    expect(devices[0]).toMatchObject({ uuid: DESK_UUID, major: null, minor: null });
+    expect(devices[1]).toMatchObject({ major: 3, minor: 4 });
   });
 });

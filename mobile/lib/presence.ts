@@ -16,33 +16,21 @@
 import * as Location from "expo-location";
 import * as SecureStore from "expo-secure-store";
 import * as TaskManager from "expo-task-manager";
-import { apiFetch, BEACONS_KEY, HEARTBEAT_INTERVAL_KEY } from "./api";
+import { DESK_DEVICES_KEY, HEARTBEAT_INTERVAL_KEY, isNetworkError, loadJson, newIdempotencyKey } from "./api";
+import {
+  buildHeartbeatBody,
+  fetchStatus,
+  HeartbeatResponse,
+  PresenceState,
+  sendHeartbeat as postHeartbeat,
+  SessionOut,
+} from "./attendanceApi";
 import { scanOnce } from "./ble";
 import { Beacon, BeaconReading } from "./beacons";
-import { API_CONFIG } from "./config";
+import { collectTrust } from "./collectTrust";
+import { PositionLike } from "./trust";
 
-export type PresenceState = "present" | "away" | "outside";
-
-export type SessionOut = {
-  id: string;
-  date: string;
-  started_at: string;
-  ended_at: string | null;
-  source: "app" | "request";
-  minutes: number;
-  present_minutes?: number;
-  away_minutes?: number;
-  state?: PresenceState | null;
-};
-
-export type HeartbeatResponse = {
-  state: PresenceState;
-  checked_in: boolean;
-  session: SessionOut | null;
-  next_heartbeat_seconds: number;
-};
-
-export type HeartbeatCoords = { latitude: number; longitude: number; accuracy?: number | null };
+export type { HeartbeatResponse, PresenceState, SessionOut };
 
 export const BACKGROUND_TASK = "attendify-presence-heartbeat";
 export const DEFAULT_HEARTBEAT_SECONDS = 300;
@@ -55,18 +43,14 @@ export function shouldSendHeartbeat(now: number, last: number, intervalSeconds: 
   return now - last >= intervalSeconds * 1000 * 0.8;
 }
 
-export async function sendHeartbeat(
-  coords: HeartbeatCoords,
-  beacons: BeaconReading[]
-): Promise<HeartbeatResponse> {
-  const response = await apiFetch<HeartbeatResponse>(API_CONFIG.ENDPOINTS.HEARTBEAT, {
-    json: {
-      latitude: coords.latitude,
-      longitude: coords.longitude,
-      accuracy: coords.accuracy ?? null,
-      beacons,
-    },
-  });
+/**
+ * One heartbeat attempt: trust evidence (location with the mock flag, device with root and
+ * integrity) plus beacon readings. The Idempotency-Key is created per attempt and reused by the
+ * HTTP client when it retries after a network error or 5xx.
+ */
+export async function sendHeartbeat(position: PositionLike, beacons: BeaconReading[]): Promise<HeartbeatResponse> {
+  const trust = await collectTrust(position);
+  const response = await postHeartbeat(buildHeartbeatBody({ trust, beacons }), newIdempotencyKey());
   lastHeartbeatAt = Date.now();
   return response;
 }
@@ -92,15 +76,15 @@ TaskManager.defineTask<{ locations?: Location.LocationObject[] }>(BACKGROUND_TAS
     // The foreground loop shares lastHeartbeatAt, so an active app is not heart-beaten twice.
     if (!shouldSendHeartbeat(Date.now(), lastHeartbeatAt, interval)) return;
 
-    const raw = await SecureStore.getItemAsync(BEACONS_KEY);
-    const beacons: Beacon[] = raw ? JSON.parse(raw) : [];
-    const readings = beacons.length ? await scanOnce() : [];
-    const result = await sendHeartbeat(location.coords, readings);
+    const devices = (await loadJson<Beacon[]>(DESK_DEVICES_KEY)) ?? [];
+    const readings = devices.length ? await scanOnce(devices) : [];
+    const result = await sendHeartbeat(location, readings);
     await SecureStore.setItemAsync(HEARTBEAT_INTERVAL_KEY, String(result.next_heartbeat_seconds || interval));
     if (!result.checked_in) await stopBackgroundTracking();
-  } catch {
-    // Network or auth problems: the next update retries. A 409 (not checked in) or 401
-    // means there is nothing to track any more.
+  } catch (error) {
+    // Network problems: the next update retries. Anything else (409 not checked in, a lost
+    // session) means there may be nothing to track any more.
+    if (isNetworkError(error)) return;
     try {
       await stopIfSessionOver();
     } catch {
@@ -110,7 +94,7 @@ TaskManager.defineTask<{ locations?: Location.LocationObject[] }>(BACKGROUND_TAS
 });
 
 async function stopIfSessionOver() {
-  const status = await apiFetch(API_CONFIG.ENDPOINTS.ATTENDANCE_STATUS);
+  const status = await fetchStatus();
   if (!status?.session) await stopBackgroundTracking();
 }
 
