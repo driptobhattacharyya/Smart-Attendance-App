@@ -4,7 +4,8 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  server: { port: 5173 },
+  // Same-origin /api in development too, so no CORS and no VITE_API_URL needed locally.
+  server: { port: 5173, proxy: { "/api": "http://127.0.0.1:8000" } },
   build: {
     rolldownOptions: {
       output: {

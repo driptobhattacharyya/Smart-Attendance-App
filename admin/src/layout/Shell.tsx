@@ -2,21 +2,26 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import {
-  Bluetooth,
   Building2,
   CalendarDays,
   ClipboardCheck,
+  History,
   LayoutDashboard,
   LogOut,
   Menu,
+  Monitor,
   Moon,
   Radio,
+  Settings as SettingsIcon,
   Sun,
+  UserRound,
   Users,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useTheme } from "../lib/theme";
-import { useRequests } from "../lib/queries";
+import { useRequests } from "../api/attendance";
+import { P } from "../api/types";
+import { ConsentBanner } from "./ConsentBanner";
 import { Avatar } from "../ui/misc";
 import { Dialog } from "../ui/Dialog";
 import { IconButton } from "../ui/Button";
@@ -33,25 +38,43 @@ function Logo() {
   );
 }
 
+interface NavItem {
+  to: string;
+  label: string;
+  icon: ReactNode;
+  end?: boolean;
+  badge?: number;
+  /** Shown when the user holds at least one of these permissions (the server still enforces them). */
+  any?: string[];
+}
+
 function NavItems({ onNavigate }: { onNavigate?: () => void }) {
-  const { user } = useAuth();
-  const requests = useRequests();
+  const { can, canAny } = useAuth();
+  const approver = canAny(P.approveTeam, P.approveOrg);
+  const requests = useRequests(approver);
   const pending = requests.data?.filter((r) => r.status === "Pending").length ?? 0;
 
-  const items: { to: string; label: string; icon: ReactNode; end?: boolean; badge?: number; admin?: boolean }[] = [
+  const items: NavItem[] = [
     { to: "/", label: "Overview", icon: <LayoutDashboard />, end: true },
-    { to: "/live", label: "Live", icon: <Radio /> },
-    { to: "/attendance", label: "Timesheets", icon: <CalendarDays /> },
-    { to: "/requests", label: "Requests", icon: <ClipboardCheck />, badge: pending },
-    { to: "/people", label: "People", icon: <Users /> },
-    { to: "/beacons", label: "Beacons", icon: <Bluetooth /> },
-    { to: "/offices", label: "Offices", icon: <Building2 />, admin: true },
+    { to: "/live", label: "Live", icon: <Radio />, any: [P.viewTeam, P.viewOrg] },
+    { to: "/attendance", label: "Timesheets", icon: <CalendarDays />, any: [P.viewTeam, P.viewOrg] },
+    { to: "/requests", label: "Requests", icon: <ClipboardCheck />, badge: pending, any: [P.approveTeam, P.approveOrg] },
+    {
+      to: "/people",
+      label: can(P.peopleManage) ? "People" : "My team",
+      icon: <Users />,
+      any: [P.peopleManage, P.peopleTeam],
+    },
+    { to: "/offices", label: "Offices", icon: <Building2 />, any: [P.placesManage] },
+    { to: "/desk-devices", label: "Desk devices", icon: <Monitor />, any: [P.placesManage] },
+    { to: "/audit", label: "Audit log", icon: <History />, any: [P.audit] },
+    { to: "/settings", label: "Settings", icon: <SettingsIcon />, any: [P.orgManage] },
   ];
 
   return (
     <nav aria-label="Main" className="flex flex-col gap-0.5">
       {items
-        .filter((i) => !i.admin || user?.role === "admin")
+        .filter((i) => !i.any || canAny(...i.any))
         .map((i) => (
           <NavLink
             key={i.to}
@@ -89,18 +112,26 @@ export function ThemeToggle() {
   );
 }
 
-function UserCard() {
-  const { user, logout } = useAuth();
-  if (!user) return null;
+function UserCard({ onNavigate }: { onNavigate?: () => void }) {
+  const { me, logout } = useAuth();
+  if (!me) return null;
   return (
-    <div className="flex items-center gap-2.5 border-t border-line pt-3">
-      <Avatar name={user.name} size={32} />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[13px] font-medium">{user.name}</p>
-        <p className="truncate text-xs text-muted capitalize">{user.role}</p>
-      </div>
+    <div className="flex items-center gap-2 border-t border-line pt-3">
+      <NavLink
+        to="/account"
+        onClick={onNavigate}
+        aria-label="Your account"
+        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg p-1 transition-colors hover:bg-surface-2"
+      >
+        <Avatar name={me.name} size={32} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-medium">{me.name}</span>
+          <span className="block truncate text-xs text-muted">{me.org.name}</span>
+        </span>
+        <UserRound className="size-4 shrink-0 text-subtle" aria-hidden />
+      </NavLink>
       <ThemeToggle />
-      <IconButton label="Sign out" onClick={logout}>
+      <IconButton label="Sign out" onClick={() => void logout()}>
         <LogOut className="size-4" />
       </IconButton>
     </div>
@@ -148,11 +179,12 @@ export function Shell() {
           <div className="flex-1">
             <NavItems onNavigate={() => setOpen(false)} />
           </div>
-          <UserCard />
+          <UserCard onNavigate={() => setOpen(false)} />
         </div>
       </Dialog>
 
       <main id="main" tabIndex={-1} className="mx-auto max-w-[1280px] px-4 py-6 outline-none sm:px-6 lg:px-8 lg:py-8">
+        <ConsentBanner />
         <Outlet />
       </main>
     </div>

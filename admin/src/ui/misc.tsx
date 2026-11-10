@@ -2,9 +2,9 @@ import type { ReactNode } from "react";
 import { AlertTriangle, PlugZap, RefreshCw } from "lucide-react";
 import { cx } from "./cx";
 import { Button } from "./Button";
-import { ApiError } from "../lib/api";
+import { ApiError } from "../api/client";
 import { initials, STATUS_HELP, STATUS_LABEL } from "../lib/format";
-import type { PresenceStatus } from "../lib/types";
+import type { PresenceStatus } from "../api/attendance";
 
 /* ---------- Badge ---------- */
 

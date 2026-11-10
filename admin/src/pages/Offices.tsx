@@ -3,13 +3,13 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Circle, MapContainer, Marker, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import { Building2, Clock, MapPin, Pencil, Plus, Radius } from "lucide-react";
-import { api } from "../lib/api";
-import type { Office } from "../lib/types";
+import { api } from "../api/client";
+import type { Office } from "../api/types";
 import { useOffices } from "../lib/queries";
 import { useToast } from "../lib/toast";
-import { Card, EmptyState, ErrorState, PageHeader, Skeleton } from "../ui/misc";
+import { Badge, Card, EmptyState, ErrorState, PageHeader, Skeleton } from "../ui/misc";
 import { Button, IconButton } from "../ui/Button";
-import { Field, Input, Select } from "../ui/form";
+import { Field, Input, Select, Switch } from "../ui/form";
 import { Dialog } from "../ui/Dialog";
 
 const pin = L.divIcon({ className: "", html: '<div class="pin"></div>', iconSize: [28, 28], iconAnchor: [14, 28] });
@@ -21,6 +21,8 @@ function zones(): string[] {
     return ["UTC"];
   }
 }
+
+const hhmm = (t: string | null | undefined) => (t ? t.slice(0, 5) : "");
 
 function browserZone(): string {
   try {
@@ -73,25 +75,30 @@ export function Offices() {
             <Card key={o.id} className="p-4 sm:p-5">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <h2 className="truncate font-semibold">{o.name}</h2>
+                  <h2 className="flex items-center gap-2 font-semibold">
+                    <span className="truncate">{o.name}</span>
+                    {!o.active && <Badge>Inactive</Badge>}
+                  </h2>
                   <p className="truncate text-[13px] text-muted">{o.address || `${o.latitude.toFixed(4)}, ${o.longitude.toFixed(4)}`}</p>
                 </div>
                 <IconButton label={`Edit ${o.name}`} onClick={() => setEditing(o)}>
                   <Pencil className="size-4" />
                 </IconButton>
               </div>
-              <dl className="mt-4 grid grid-cols-3 gap-2 text-[13px]">
+              <dl className="mt-4 grid grid-cols-2 gap-x-2 gap-y-3 text-[13px] sm:grid-cols-4">
                 <div>
                   <dt className="flex items-center gap-1 text-xs text-muted">
                     <Radius className="size-3" /> Radius
                   </dt>
-                  <dd className="font-medium tabular-nums">{o.radius} m</dd>
+                  <dd className="font-medium tabular-nums">{o.radius_m} m</dd>
                 </div>
                 <div>
                   <dt className="flex items-center gap-1 text-xs text-muted">
-                    <Clock className="size-3" /> Starts
+                    <Clock className="size-3" /> Hours
                   </dt>
-                  <dd className="font-medium tabular-nums">{o.work_start ?? "09:30"}</dd>
+                  <dd className="font-medium tabular-nums">
+                    {o.work_start && o.work_end ? `${hhmm(o.work_start)} – ${hhmm(o.work_end)}` : "Not set"}
+                  </dd>
                 </div>
                 <div className="min-w-0">
                   <dt className="flex items-center gap-1 text-xs text-muted">
@@ -138,9 +145,11 @@ function OfficeDialog({ office, onClose }: { office: Office | null; onClose: () 
   const [address, setAddress] = useState(office?.address ?? "");
   const [lat, setLat] = useState(office?.latitude ?? 22.5726);
   const [lng, setLng] = useState(office?.longitude ?? 88.3639);
-  const [radius, setRadius] = useState(office?.radius ?? 150);
+  const [radius, setRadius] = useState(office?.radius_m ?? 150);
   const [tz, setTz] = useState(office?.timezone ?? browserZone());
-  const [start, setStart] = useState(office?.work_start ?? "09:30");
+  const [start, setStart] = useState(hhmm(office?.work_start) || "09:30");
+  const [end, setEnd] = useState(hhmm(office?.work_end) || "18:30");
+  const [active, setActive] = useState(office?.active ?? true);
   const [placed, setPlaced] = useState(!!office);
   const tzList = useMemo(() => {
     const l = zones();
@@ -154,11 +163,13 @@ function OfficeDialog({ office, onClose }: { office: Office | null; onClose: () 
         address: address.trim() || null,
         latitude: +lat.toFixed(6),
         longitude: +lng.toFixed(6),
-        radius,
+        radius_m: radius,
         timezone: tz,
         work_start: start,
+        work_end: end,
+        active,
       };
-      return office ? api<Office>(`/offices/${office.id}`, { method: "PATCH", body }) : api<Office>("/offices", { method: "POST", body });
+      return office ? api<Office>(`/places/offices/${office.id}`, { method: "PATCH", body }) : api<Office>("/places/offices", { method: "POST", body });
     },
     onSuccess: () => {
       toast.success(office ? "Office saved" : "Office created");
@@ -260,7 +271,7 @@ function OfficeDialog({ office, onClose }: { office: Office | null; onClose: () 
           )}
         </Field>
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-3">
           <Field label="Timezone">
             {(p) => (
               <Select {...p} value={tz} onChange={(e) => setTz(e.target.value)}>
@@ -275,7 +286,11 @@ function OfficeDialog({ office, onClose }: { office: Office | null; onClose: () 
           <Field label="Work starts" hint="Check-ins after this time count as late.">
             {(p) => <Input {...p} type="time" value={start} onChange={(e) => setStart(e.target.value)} required />}
           </Field>
+          <Field label="Work ends">
+            {(p) => <Input {...p} type="time" value={end} onChange={(e) => setEnd(e.target.value)} required />}
+          </Field>
         </div>
+        <Switch checked={active} onChange={setActive} label="Active" hint="Inactive offices cannot be used for check-in. Deactivate instead of deleting once people were assigned." />
       </form>
     </Dialog>
   );
