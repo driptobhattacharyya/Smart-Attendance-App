@@ -30,12 +30,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     HOME=/tmp \
     FACE_MODELS_DIR=/app/models \
     PORT=8000 \
-    AWS_LWA_READINESS_CHECK_PATH=/api/health \
+    AWS_LWA_READINESS_CHECK_PATH=/api/v1/health \
     AWS_LWA_ASYNC_INIT=true
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 COPY --from=build /app/models /app/models
 COPY app ./app
+COPY alembic.ini ./alembic.ini
+COPY alembic ./alembic
 
 # Lambda runs the container as an arbitrary unprivileged user on a read-only filesystem
 # (only /tmp is writable), so there is no USER line; everything above is world-readable.

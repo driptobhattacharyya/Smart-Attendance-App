@@ -12,6 +12,8 @@ COPY scripts ./scripts
 RUN sh scripts/download_models.sh /app/models
 
 COPY app ./app
+COPY alembic.ini ./alembic.ini
+COPY alembic ./alembic
 RUN useradd --create-home appuser
 USER appuser
 ENV PATH="/app/.venv/bin:$PATH" FACE_MODELS_DIR=/app/models PORT=8000

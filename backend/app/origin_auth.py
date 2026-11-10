@@ -11,7 +11,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 HEADER = b"x-origin-auth"
-EXEMPT_PATHS = {"/api/health"}
+EXEMPT_PATHS = {"/api/v1/health"}
 
 
 class OriginAuthMiddleware:

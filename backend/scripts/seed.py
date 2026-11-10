@@ -1,311 +1,205 @@
-"""Create demo data: one office, an admin, a manager and an employee.
+"""Demo data: one organization with an owner, an admin, two managers (a reporting tree), twelve
+employees in two offices and three departments, tags and desk apps.
 
-    uv run python -m scripts.seed --lat 22.5726 --lon 88.3639 --tz Asia/Kolkata
-    uv run python -m scripts.seed --lat 22.5726 --lon 88.3639 --tz Asia/Kolkata --demo
+    uv run alembic upgrade head
+    uv run python -m scripts.seed
 
-With ``--demo`` it also creates a second office, 12 more employees, beacons and 14 days of
-realistic sessions (present/away, late arrivals, an approved leave, a pending correction) so the
-admin console has something to show. The demo data is deterministic (seeded RNG).
-
-Passwords are printed once. Safe to re-run: existing users are left alone. Seeded users have
-already accepted the consent text, so the demo works without the consent screen.
+Needs DATABASE_URL (attendify_app) and DATABASE_SYSTEM_URL (attendify_system). Safe to re-run:
+does nothing if the demo organization already exists. Attendance demo data arrives with step 2.
 """
 
-import argparse
+from __future__ import annotations
+
 import asyncio
-import random
-import secrets
-from datetime import UTC, date, datetime, time, timedelta
-from zoneinfo import ZoneInfo
+import sys
+import uuid
 
-from app.config import get_settings
-from app.db import create_client, ensure_indexes, next_employee_id, utcnow
-from app.security import hash_password
+from sqlalchemy import func, select
 
-DEMO_SEED = 20261109
-DEMO_BEACON_UUID = "e2c56db5-dffb-48d2-b060-d0f5a71096e0"
-DEMO_ZONE_UUID = "11111111-2222-3333-4444-555555555555"
-DEMO_DAYS = 14
+from app.auth.deps import Ctx, Principal
+from app.core.config import Settings, get_settings
+from app.core.db import Database
+from app.core.security import PasswordHasher
+from app.people import service as people
+from app.people.schemas import UserCreate
+from app.places import service as places
+from app.places.schemas import DeskDeviceCreate, OfficeCreate
+from app.rbac.permissions import BUILTIN_ROLES
+from app.tenancy.models import Organization
+from app.tenancy.schemas import SignupIn
+from app.tenancy.signup import signup_org
 
-NAMES = [
-    ("Ananya Sen", "ananya"),
-    ("Rohan Gupta", "rohan"),
-    ("Meera Iyer", "meera"),
-    ("Imran Khan", "imran"),
-    ("Sneha Das", "sneha"),
-    ("Vikram Rao", "vikram"),
-    ("Priya Nair", "priya"),
-    ("Arjun Mehta", "arjun"),
-    ("Kavya Reddy", "kavya"),
-    ("Dev Malhotra", "dev"),
-    ("Tara Bose", "tara"),
-    ("Farhan Ali", "farhan"),
+DEMO_SLUG = "demo"
+DEMO_PASSWORD = "demo-password-123"
+TAG_UUID = "6a1f3c2e-8b4d-4e7a-9c2f-a7d1e5b3c901"
+
+OFFICES = [
+    OfficeCreate(
+        name="Bengaluru HQ",
+        latitude=12.9716,
+        longitude=77.5946,
+        radius_m=150,
+        timezone="Asia/Kolkata",
+        address="MG Road, Bengaluru",
+        work_start="09:30",
+        work_end="18:30",
+    ),
+    OfficeCreate(
+        name="Mumbai Studio",
+        latitude=19.0760,
+        longitude=72.8777,
+        radius_m=120,
+        timezone="Asia/Kolkata",
+        address="Bandra Kurla Complex, Mumbai",
+        work_start="10:00",
+        work_end="19:00",
+    ),
 ]
+DEPARTMENTS = ["Engineering", "Sales", "Operations"]
+EMPLOYEES = [
+    ("Asha Rao", 0, 0),
+    ("Ben Thomas", 0, 0),
+    ("Chitra Iyer", 0, 0),
+    ("Dev Malhotra", 0, 0),
+    ("Esha Nair", 0, 1),
+    ("Farhan Ali", 0, 1),
+    ("Gita Menon", 1, 1),
+    ("Hari Prasad", 1, 1),
+    ("Isha Kapoor", 1, 2),
+    ("Jay Shah", 1, 2),
+    ("Kavya Reddy", 1, 2),
+    ("Lalit Verma", 1, 0),
+]  # (name, office index, department index)
 
 
-async def _create_user(db, name, email, role, office_id, password, *, face=False, rng=None):
-    employee_id = await next_employee_id(db)
-    now = utcnow()
-    doc = {
-        "employee_id": employee_id,
-        "name": name,
-        "email": email,
-        "password_hash": hash_password(password),
-        "role": role,
-        "team_id": office_id,
-        "office_id": office_id,
-        "active": True,
-        "created_at": now,
-        "consent": {"version": get_settings().consent_version, "accepted_at": now},
-    }
-    if face and rng is not None:
-        doc["face_embedding"] = [round(rng.gauss(0, 1), 4) for _ in range(128)]
-        doc["face_enrolled_at"] = now
-    await db.users.insert_one(doc)
-    return employee_id
+def _slug(name: str) -> str:
+    return name.lower().replace(" ", ".")
 
 
-async def _ensure_office(db, name, lat, lon, radius, tz, work_start):
-    office = await db.offices.find_one({"name": name})
-    if not office:
-        office = {
-            "name": name,
-            "latitude": lat,
-            "longitude": lon,
-            "radius": radius,
-            "timezone": tz,
-            "work_start": work_start,
-        }
-        office["_id"] = (await db.offices.insert_one(office)).inserted_id
-        print(f"Created office {name} ({lat}, {lon}, r={radius} m)")
-    return office
-
-
-def _presence_log(rng, start, end, away_windows):
-    """One entry every 5 minutes, 'away' inside the windows. Returns (log, present_s, away_s)."""
-    log, present, away = [], 0, 0
-    t = start
-    while t + timedelta(minutes=5) <= end:
-        t += timedelta(minutes=5)
-        is_away = any(a <= t < b for a, b in away_windows)
-        state = "away" if is_away else "present"
-        log.append(
-            {
-                "at": t,
-                "state": state,
-                "distance_m": round(rng.uniform(3, 60), 1),
-                "best_rssi": None if is_away else rng.randint(-78, -52),
-            }
-        )
-        if is_away:
-            away += 300
-        else:
-            present += 300
-    return log, present, away
-
-
-def _day_sessions(rng, employee_id, office, day: date, late: bool, now: datetime):
-    """One to three app sessions for a working day, as documents."""
-    tz = ZoneInfo(office.get("timezone", "UTC"))
-    office_id = str(office["_id"])
-    h, m = map(int, office.get("work_start", "09:30").split(":"))
-    base = datetime.combine(day, time(h, m), tz)
-    start = base + timedelta(minutes=rng.randint(25, 70) if late else rng.randint(-25, 0))
-    end = start + timedelta(hours=8, minutes=rng.randint(-30, 60))
-    # lunch break splits the day in two sessions most of the time
-    pieces = [(start, end)]
-    if rng.random() < 0.7:
-        lunch = start + timedelta(hours=4, minutes=rng.randint(0, 30))
-        pieces = [(start, lunch), (lunch + timedelta(minutes=rng.randint(30, 50)), end)]
-    docs = []
-    for s, e in pieces:
-        if s.astimezone(UTC) >= now:
-            continue
-        e = min(e, now.astimezone(tz))
-        windows = []
-        for _ in range(rng.randint(0, 3)):  # away from the desk (meetings, coffee)
-            a = s + timedelta(
-                minutes=rng.randint(30, max(31, int((e - s).total_seconds() // 60) - 30))
+async def seed(
+    database: Database, settings: Settings, hasher: PasswordHasher, password: str = DEMO_PASSWORD
+) -> dict | None:
+    """Returns a summary, or None when the demo organization already exists."""
+    async with database.system_session() as s:
+        exists = (
+            await s.execute(
+                select(Organization.id).where(func.lower(Organization.slug) == DEMO_SLUG)
             )
-            windows.append((a, a + timedelta(minutes=rng.randint(10, 35))))
-        log, present_s, away_s = _presence_log(rng, s, e, windows)
-        docs.append(
-            {
-                "employee_id": employee_id,
-                "team_id": office_id,
-                "office_id": office_id,
-                "date": day.isoformat(),
-                "started_at": s.astimezone(UTC),
-                "ended_at": e.astimezone(UTC),
-                "source": "app",
-                "last_heartbeat_at": e.astimezone(UTC),
-                "last_state": "present",
-                "present_seconds": present_s,
-                "away_seconds": away_s,
-                "presence_log": log[-500:],
-                "check_in": {
-                    "latitude": office["latitude"],
-                    "longitude": office["longitude"],
-                    "accuracy": 12.0,
-                    "distance_m": round(rng.uniform(5, 80), 1),
-                    "best_rssi": rng.randint(-72, -50),
-                },
-            }
+        ).first()
+    if exists:
+        return None
+
+    org, owner, _ = await signup_org(
+        database,
+        settings,
+        hasher,
+        SignupIn(
+            org_name="Demo", name="Olivia Owner", email="owner@demo.example.com", password=password
+        ),
+        ip=None,
+        user_agent="seed",
+    )
+
+    async with database.tenant_session(org.id) as session:
+        db_org = (await session.execute(select(Organization))).scalar_one()
+        role = next(r for r in BUILTIN_ROLES if r.key == "owner")
+        ctx = Ctx(
+            db=session,
+            principal=Principal(
+                user_id=owner.id,
+                org_id=org.id,
+                role_key="owner",
+                permissions=frozenset(role.permissions),
+                session_id=uuid.uuid4(),
+                name=owner.name,
+                email=owner.email,
+            ),
+            org=db_org,
+            settings=settings,
+            hasher=hasher,
+            user_agent="seed",
         )
-    return docs
+        db_org.modules = {**db_org.modules, "desk_app": True, "proximity": True}
 
+        offices = [await places.create_office(ctx, o) for o in OFFICES]
+        depts = [await people.create_department(ctx, n) for n in DEPARTMENTS]
 
-async def _seed_demo(db, base_office, args) -> None:
-    marker = f"{NAMES[0][1]}@attendify.demo"
-    if await db.users.find_one({"email": marker}):
-        print("Demo data already present, skipping")
-        return
-    rng = random.Random(DEMO_SEED)
-    branch = await _ensure_office(
-        db, "Branch Office", args.lat + 0.05, args.lon + 0.05, args.radius, args.tz, "10:00"
-    )
-    offices = [base_office, branch]
-    password = secrets.token_urlsafe(9)
+        async def add(name, role_key, manager=None, office=None, dept=None):
+            return await people.create_user(
+                ctx,
+                UserCreate(
+                    name=name,
+                    email=f"{_slug(name)}@demo.example.com",
+                    role_key=role_key,
+                    manager_id=manager.id if manager else None,
+                    office_id=office.id if office else None,
+                    department_id=dept.id if dept else None,
+                ),
+                password=password,
+            )
 
-    people = []  # (employee_id, office)
-    for i, (name, slug) in enumerate(NAMES):
-        office = offices[i % 2]
-        face = i != 5  # one employee has not enrolled their face yet
-        eid = await _create_user(
-            db, name, f"{slug}@attendify.demo", "employee", str(office["_id"]), password,
-            face=face, rng=rng,
-        )  # fmt: skip
-        people.append((eid, office))
-    print(f"demo employees ({len(people)})  password: {password}")
+        await add("Adam Admin", "admin", owner, offices[0], depts[2])
+        mgr1 = await add("Meera Manager", "manager", owner, offices[0], depts[0])
+        mgr2 = await add("Manoj Manager", "manager", mgr1, offices[1], depts[1])
+        employees = []
+        for i, (name, office_i, dept_i) in enumerate(EMPLOYEES):
+            boss = mgr1 if i < 6 else mgr2
+            employees.append(await add(name, "employee", boss, offices[office_i], depts[dept_i]))
 
-    # Beacons: desk beacons for the head-office people, a shared zone beacon for the branch,
-    # and two spare (unassigned) ones.
-    beacon_minor = 1
-    for eid, office in people:
-        if office is base_office and eid != people[4][0]:  # one head-office person has none
-            await db.beacons.insert_one(
-                {
-                    "office_id": str(office["_id"]), "name": f"Desk {beacon_minor}",
-                    "uuid": DEMO_BEACON_UUID, "major": 1, "minor": beacon_minor,
-                    "assigned_employee_id": eid, "active": True,
-                }
-            )  # fmt: skip
-            beacon_minor += 1
-    await db.beacons.insert_one(
-        {
-            "office_id": str(branch["_id"]), "name": "Branch floor", "uuid": DEMO_ZONE_UUID,
-            "major": 2, "minor": None, "assigned_employee_id": None, "active": True,
+        for i, office in enumerate(offices):
+            await places.create_device(
+                ctx,
+                DeskDeviceCreate(
+                    kind="tag",
+                    name=f"{office.name} entrance tag",
+                    office_id=office.id,
+                    ibeacon_uuid=uuid.UUID(TAG_UUID),
+                    major=100 + i,
+                    minor=1,
+                ),
+            )
+        desk_apps = []
+        for employee in employees[:2]:
+            desk_apps.append(
+                await places.create_device(
+                    ctx,
+                    DeskDeviceCreate(
+                        kind="desk_app",
+                        name=f"{employee.name} desk",
+                        office_id=employee.office_id,
+                        assigned_user_id=employee.id,
+                    ),
+                )
+            )
+        code, _ = await places.create_pairing_code(ctx, desk_apps[0].id)
+        return {
+            "org_slug": org.slug,
+            "owner_email": owner.email,
+            "password": password,
+            "users": 1 + 1 + 2 + len(employees),
+            "offices": len(offices),
+            "departments": len(depts),
+            "desk_pairing_code": code,
+            "desk_device_id": str(desk_apps[0].id),
         }
-    )  # fmt: skip
-    for n in (1, 2):
-        await db.beacons.insert_one(
-            {
-                "office_id": str(base_office["_id"]), "name": f"Spare {n}",
-                "uuid": DEMO_BEACON_UUID, "major": 9, "minor": n,
-                "assigned_employee_id": None, "active": True,
-            }
-        )  # fmt: skip
-
-    now = utcnow()
-    sessions = []
-    for idx, (eid, office) in enumerate(people):
-        tz = ZoneInfo(office.get("timezone", "UTC"))
-        today = now.astimezone(tz).date()
-        habitually_late = idx in (2, 7)
-        for back in range(DEMO_DAYS - 1, -1, -1):
-            day = today - timedelta(days=back)
-            if day.weekday() >= 5:
-                continue
-            if idx == 3 and back in (6, 7, 8):  # on approved leave (see below)
-                continue
-            if rng.random() < 0.05:  # an occasional absence
-                continue
-            late = habitually_late and rng.random() < 0.6 or rng.random() < 0.08
-            docs = _day_sessions(rng, eid, office, day, late, now)
-            if back == 0 and docs and idx % 3 == 0:
-                # still at work: leave the last session open with a fresh heartbeat
-                docs[-1]["ended_at"] = None
-                docs[-1]["last_heartbeat_at"] = now - timedelta(minutes=rng.randint(0, 4))
-                docs[-1]["last_state"] = rng.choice(["present", "present", "away"])
-            sessions.extend(docs)
-    if sessions:
-        await db.attendance_sessions.insert_many(sessions)
-
-    # An approved leave (on the board it shows as "on leave" for these days), a pending correction.
-    tz = ZoneInfo(people[3][1].get("timezone", "UTC"))
-    today = now.astimezone(tz).date()
-    leave_start = today - timedelta(days=8)
-    leave_end = today - timedelta(days=6)
-    req = {
-        "reason": "Family wedding",
-        "start_date": leave_start.isoformat(),
-        "end_date": leave_end.isoformat(),
-        "entry_time": None,
-        "exit_time": None,
-        "kind": "leave",
-        "submitted_at": now - timedelta(days=12),
-    }
-    await db.attendance_requests.insert_one(
-        {
-            **req, "employee_id": people[3][0], "team_id": str(people[3][1]["_id"]),
-            "status": "Approved", "decided_by": "ADMIN", "decided_at": now - timedelta(days=11),
-            "comment": "Enjoy!",
-        }
-    )  # fmt: skip
-    day = today - timedelta(days=1)
-    while day.weekday() >= 5:
-        day -= timedelta(days=1)
-    await db.attendance_requests.insert_one(
-        {
-            "employee_id": people[1][0], "team_id": str(people[1][1]["_id"]),
-            "reason": "Phone died, forgot to check in", "start_date": day.isoformat(),
-            "end_date": day.isoformat(), "entry_time": "09:45", "exit_time": "18:10",
-            "kind": "correction", "status": "Pending", "submitted_at": now - timedelta(hours=5),
-        }
-    )  # fmt: skip
-    print(f"Created {len(sessions)} sessions, {await db.beacons.count_documents({})} beacons")
 
 
-async def main(args: argparse.Namespace) -> None:
+async def main() -> int:
     settings = get_settings()
-    client = create_client(settings.mongodb_uri)
-    db = client[settings.mongodb_db]
-    await ensure_indexes(db)
-
-    office = await _ensure_office(
-        db, args.office, args.lat, args.lon, args.radius, args.tz, "09:30"
-    )
-    office_id = str(office["_id"])
-
-    people = [
-        ("admin", "Demo Admin", "admin@attendify.demo"),
-        ("manager", "Demo Manager", "manager@attendify.demo"),
-        ("employee", "Demo Employee", "employee@attendify.demo"),
-    ]
-    for role, name, email in people:
-        if await db.users.find_one({"email": email}):
-            print(f"{email} already exists, skipping")
-            continue
-        password = secrets.token_urlsafe(9)
-        employee_id = await _create_user(db, name, email, role, office_id, password)
-        print(f"{role:9} {employee_id}  {email}  password: {password}")
-
-    if args.demo:
-        await _seed_demo(db, office, args)
-
-    await client.close()
+    database = Database(settings)
+    try:
+        summary = await seed(database, settings, PasswordHasher(settings))
+    finally:
+        await database.dispose()
+    if summary is None:
+        print("Demo organization already exists; nothing to do.")
+        return 0
+    print("Seeded demo organization.")
+    for key, value in summary.items():
+        print(f"  {key}: {value}")
+    print("Log in with the owner e-mail above, or: org_slug + employee_code E0001 / E0002 ...")
+    return 0
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--office", default="Head Office")
-    parser.add_argument("--lat", type=float, required=True)
-    parser.add_argument("--lon", type=float, required=True)
-    parser.add_argument("--radius", type=float, default=150)
-    parser.add_argument("--tz", default="UTC")
-    parser.add_argument(
-        "--demo",
-        action="store_true",
-        help="also create a second office, 12 employees, beacons and 14 days of sessions",
-    )
-    asyncio.run(main(parser.parse_args()))
+    sys.exit(asyncio.run(main()))

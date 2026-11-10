@@ -15,6 +15,24 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: attendify_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Superuser URL: the tests run Alembic against it (resetting its public schema) and
+      # create the attendify_app / attendify_system roles through the migration.
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/attendify_test
     defaults:
       run:
         working-directory: backend
@@ -26,6 +44,7 @@ jobs:
           cache-dependency-glob: backend/uv.lock
       - run: uv sync --all-groups --frozen
       - run: uv run ruff check .
+      - run: uv run ruff format --check .
       - run: uv run pytest -q
 
   admin:

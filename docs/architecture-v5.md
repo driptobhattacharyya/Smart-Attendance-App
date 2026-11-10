@@ -240,3 +240,53 @@ decides and records it:
    requests incl. WFH, dashboards/presence board/timesheets/export on `attendance_days`, retention.
 3. **Face & liveness** — challenge, multi-frame verification, anti-spoof model, providers.
 4. **Clients** — admin and mobile on `/api/v1` with generated types; desk app rotating IDs.
+
+## Appendix A. Rotating desk identity: reference and test vectors
+
+Implementation: `backend/app/places/identity.py` (`rotating_ids`, `match_reading`, `window_for`).
+
+```
+window  = floor(unix_seconds / 300)                       # integer
+digest  = HMAC-SHA256(key = secret (32 bytes), msg = window as 8-byte big-endian)
+major   = digest[0] << 8 | digest[1]                      # 0..65535
+minor   = digest[2] << 8 | digest[3]                      # 0..65535
+uuid    = organizations.settings.desk_uuid                # returned as beacon.uuid at pairing
+```
+
+`secret` is delivered once, base64 encoded, as the top-level `secret` field of the
+`POST /api/v1/desk/pair` response (together with `device_token`, `beacon {id, name, uuid,
+window_seconds}`, `employee`, `heartbeat_interval_seconds`, `server_time`). The desk app computes
+windows from `unix_now + skew`, where `skew = server_time (from pairing / each heartbeat) - local
+clock`. The server accepts readings whose `(major, minor)` equals the device's value for window
+`w-1`, `w` or `w+1` of the reading's receive time.
+
+Test vectors, `secret = bytes(range(32))` (0x00, 0x01, ... 0x1f):
+
+| window | major | minor |
+|---|---|---|
+| 0 | 40716 | 55737 |
+| 1 | 50226 | 57433 |
+| 5000000 | 9808 | 3354 |
+
+Python check:
+
+```python
+import hmac, hashlib
+secret = bytes(range(32))
+def ids(w):
+    h = hmac.new(secret, w.to_bytes(8, "big"), hashlib.sha256).digest()
+    return h[0] << 8 | h[1], h[2] << 8 | h[3]
+assert ids(0) == (40716, 55737) and ids(1) == (50226, 57433) and ids(5_000_000) == (9808, 3354)
+```
+
+## Appendix B. Deviations and details of the foundation implementation
+
+- RLS policies use `app_org_id()` (`NULLIF(current_setting('app.org_id', true), '')::uuid`) instead
+  of a bare `current_setting('app.org_id')::uuid`: with no tenant context (or after a transaction
+  that set it, which leaves `''` behind) queries see zero rows rather than failing with a cast error.
+  `organizations` is keyed on `id` instead of `org_id`. `auth_attempts` (rate-limit ledger) is the
+  only non-tenant table; only `attendify_system` has grants on it.
+- Tenant context uses `SET LOCAL app.org_id = '<uuid>'` with a validated `UUID`.
+- Sessions: `auth_sessions.family_id` is the public session id and the `sid` claim; refresh rotation
+  adds a row to the family and sets `replaced_by` on the old one.
+- Migrations that add a tenant table call `app.core.rls.tenant_table_statements(table)`.
