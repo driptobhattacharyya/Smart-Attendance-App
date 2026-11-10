@@ -2,20 +2,60 @@
 // server assigned to me, and turning raw sightings into API readings.
 // Nothing here touches native modules so it can be unit tested.
 
-/** A beacon registered by an admin (GET /beacons/mine). */
+/**
+ * A thing the phone should scan for: a desk tag (exact uuid/major/minor) or a desk app
+ * (org desk uuid with major/minor = null, because its identity rotates every 5 minutes).
+ * Normalised from GET /places/desk-devices/mine by normalizeDeskDevice().
+ */
 export type Beacon = {
   id: string;
-  office_id?: string;
+  kind?: "tag" | "desk_app";
+  office_id?: string | null;
   name: string;
-  /** Proximity UUID, lowercase with dashes. */
+  /** Proximity UUID. */
   uuid: string;
-  /** null = match any */
+  /** null = match any (rotating desk apps) */
   major: number | null;
-  /** null = match any */
+  /** null = match any (rotating desk apps) */
   minor: number | null;
-  assigned_employee_id?: string | null;
+  assigned_user_id?: string | null;
   active?: boolean;
 };
+
+/** The wire shape of a desk device (api-v1 "Places"). */
+export type DeskDeviceDto = {
+  id: string;
+  kind?: "tag" | "desk_app";
+  name: string;
+  office_id?: string | null;
+  assigned_user_id?: string | null;
+  active?: boolean;
+  ibeacon_uuid?: string | null;
+  uuid?: string | null;
+  major?: number | null;
+  minor?: number | null;
+};
+
+/** Desk devices without an iBeacon UUID cannot be scanned for and are dropped. */
+export function normalizeDeskDevices(devices: DeskDeviceDto[] | null | undefined): Beacon[] {
+  const out: Beacon[] = [];
+  for (const d of devices ?? []) {
+    const uuid = d.ibeacon_uuid ?? d.uuid;
+    if (!uuid || d.active === false) continue;
+    out.push({
+      id: d.id,
+      kind: d.kind,
+      name: d.name,
+      office_id: d.office_id,
+      assigned_user_id: d.assigned_user_id,
+      active: d.active,
+      uuid: uuid.toLowerCase(),
+      major: d.major ?? null,
+      minor: d.minor ?? null,
+    });
+  }
+  return out;
+}
 
 /** What the phone sends to the server (check-in and heartbeat body). */
 export type BeaconReading = {
@@ -154,4 +194,21 @@ export function beaconStatus(
 /** Drop sightings that are too old to matter. */
 export function pruneSightings(sightings: Sighting[], now: number, windowMs: number = READING_WINDOW_MS): Sighting[] {
   return sightings.filter((s) => now - s.seenAt <= windowMs);
+}
+
+/**
+ * Readings to send to the server: the best recent sighting of every distinct beacon identity
+ * that matches one of my desk devices. A device with null major/minor is a wildcard, so every
+ * rotating (major, minor) heard with its UUID is forwarded and the server does the matching
+ * against the identities of the current time windows. Everything else heard nearby is dropped.
+ */
+export function readingsForDevices(
+  sightings: Sighting[],
+  devices: Pick<Beacon, "uuid" | "major" | "minor">[],
+  now: number,
+  windowMs: number = READING_WINDOW_MS
+): BeaconReading[] {
+  if (devices.length === 0) return [];
+  const relevant = sightings.filter((s) => devices.some((d) => matchesBeacon(s, d)));
+  return bestReadings(relevant, now, windowMs);
 }

@@ -2,26 +2,15 @@ import { useFonts } from "expo-font";
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useContext } from "react";
+import { useEffect, useContext, useState } from "react";
 import "react-native-reanimated";
 // Registers the background presence task (must run at startup, before any component mounts).
 import "@/lib/presence";
 import { AppContext, AppProvider } from "@/context/AppContext";
 import ConsentScreen from "@/components/ConsentScreen";
 import FaceEnrolmentScreen from "@/components/FaceEnrolmentScreen";
-import {
-  ApiError,
-  apiFetch,
-  clearSession,
-  loadStoredConsentRequired,
-  loadStoredFaceEnrolled,
-  TOKEN_KEY,
-} from "@/lib/api";
-import { API_CONFIG } from "@/lib/config";
-import * as SecureStore from "expo-secure-store";
 import { useColorScheme } from "@/hooks/useColorScheme";
 import React from "react";
-import { useRouter } from "expo-router";
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -36,42 +25,21 @@ function RootLayoutContent() {
   if (!context) {
     throw new Error('RootLayoutContent must be used within an AppProvider');
   }
-  const { isLoggedIn, setIsLoggedIn, consentRequired, setConsentRequired, faceEnrolled, setFaceEnrolled } = context;
-  const router = useRouter();
+  const { isLoggedIn, consentRequired, faceEnrolled, faceRequired, restoreSession } = context;
+  const [restored, setRestored] = useState(false);
 
-  const checkLoginStatus = async () => {
-    try {
-      const token = await SecureStore.getItemAsync(TOKEN_KEY);
-      if (!token) {
-        setIsLoggedIn(false);
-        return;
-      }
-      // Make sure the saved token is still valid (it expires after a while).
-      const me = await apiFetch(API_CONFIG.ENDPOINTS.ME);
-      setConsentRequired(Boolean(me?.consent_required));
-      if (typeof me?.face_enrolled === "boolean") setFaceEnrolled(me.face_enrolled);
-      setIsLoggedIn(true);
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        await clearSession();
-        setIsLoggedIn(false);
-      } else {
-        // Offline: keep the user signed in; requests will retry later. Use the last known consent state.
-        setConsentRequired(await loadStoredConsentRequired());
-        setFaceEnrolled(await loadStoredFaceEnrolled());
-        setIsLoggedIn(!!(await SecureStore.getItemAsync(TOKEN_KEY)));
-      }
-    }
-  };
+  // Resume a saved session (refresh token -> access token -> /people/me) before showing anything.
+  useEffect(() => {
+    restoreSession().finally(() => setRestored(true));
+  }, []);
 
   useEffect(() => {
-    if (loaded) {
+    if (loaded && restored) {
       SplashScreen.hideAsync();
     }
-    checkLoginStatus();
-  }, [loaded]);
+  }, [loaded, restored]);
 
-  if (!loaded) {
+  if (!loaded || !restored) {
     return null;
   }
 
@@ -87,7 +55,7 @@ function RootLayoutContent() {
   }
 
   // After consent, a logged-in user without an enrolled face enrols before the tabs.
-  if (isLoggedIn && !faceEnrolled) {
+  if (isLoggedIn && faceRequired && !faceEnrolled) {
     return (
       <ThemeProvider value={colorScheme === "dark" ? DarkTheme : DefaultTheme}>
         <FaceEnrolmentScreen />
@@ -103,7 +71,8 @@ function RootLayoutContent() {
           // Auth screens
           <>
             <Stack.Screen name="index" />
-            <Stack.Screen name="signup" />
+            <Stack.Screen name="invite" />
+            <Stack.Screen name="forgot-password" />
           </>
         ) : (
           // App screens

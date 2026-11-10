@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router/js-tabs";
-import React from "react";
+import React, { useContext } from "react";
 import { Platform } from "react-native";
 
 import { HapticTab } from "@/components/HapticTab";
@@ -9,9 +9,11 @@ import TabBarBackground from "@/components/ui/TabBarBackground";
 import { Colors } from "@/constants/Colors";
 import { useColorScheme } from "@/hooks/useColorScheme";
 import FontAwesome5 from '@expo/vector-icons/FontAwesome5';
+import { AppContext } from "@/context/AppContext";
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
+  const { proximityEnabled } = useContext(AppContext);
 
   return (
     <Tabs
@@ -44,6 +46,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="bluetooth_services"
         options={{
+          // Hidden when the organisation has switched the proximity module off.
+          href: proximityEnabled ? undefined : null,
           title: "Bluetooth",
           tabBarIcon: ({ color }) => (
             <Ionicons name="bluetooth-sharp" size={24} color={color as string} />

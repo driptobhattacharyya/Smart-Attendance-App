@@ -12,7 +12,7 @@
 //   readings and the server will treat them as "away" when Bluetooth is required.
 import { PermissionsAndroid, Platform } from "react-native";
 import { BleManager, ScanMode, State } from "react-native-ble-plx";
-import { BeaconReading, bestReadings, parseIBeacon, Sighting } from "./beacons";
+import { Beacon, BeaconReading, parseIBeacon, readingsForDevices, Sighting } from "./beacons";
 
 let manager: BleManager | null = null;
 
@@ -95,9 +95,10 @@ export function startBeaconScan(
 
 /**
  * One-shot scan used by the background task: listen for `durationMs`, return the best
- * RSSI per beacon. Returns [] on iOS (see the note at the top) or if scanning fails.
+ * RSSI per beacon identity that matches one of my desk devices (null major/minor = wildcard,
+ * for rotating desk apps). Returns [] on iOS (see the note at the top) or if scanning fails.
  */
-export async function scanOnce(durationMs = 4000): Promise<BeaconReading[]> {
+export async function scanOnce(devices: Beacon[], durationMs = 4000): Promise<BeaconReading[]> {
   if (Platform.OS !== "android") return [];
   try {
     if (!(await hasBlePermissions()) || !(await isBluetoothOn())) return [];
@@ -105,7 +106,7 @@ export async function scanOnce(durationMs = 4000): Promise<BeaconReading[]> {
     const stop = startBeaconScan((s) => heard.push(s));
     await new Promise((resolve) => setTimeout(resolve, durationMs));
     stop();
-    return bestReadings(heard, Date.now(), durationMs + 1000);
+    return readingsForDevices(heard, devices, Date.now(), durationMs + 1000);
   } catch {
     return [];
   }

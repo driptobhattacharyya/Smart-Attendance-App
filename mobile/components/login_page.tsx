@@ -1,56 +1,44 @@
-import React, { useState } from "react";
-import { View, Text, TextInput, StyleSheet, Alert, TouchableOpacity, ActivityIndicator } from "react-native";
-import { ApiError, apiFetch, saveSession } from "@/lib/api";
+import React, { useContext, useState } from "react";
+import { ActivityIndicator, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useRouter } from "expo-router";
-import { API_CONFIG } from "@/lib/config";
 import { AppContext } from "@/context/AppContext";
-import { useContext } from 'react';
+import { loginWithEmail, loginWithEmployeeCode } from "@/lib/authApi";
+import { errorMessage } from "@/lib/errors";
+import { authStyles as styles } from "./authStyles";
+
+type Mode = "email" | "code";
 
 interface LoginPageProps {
-  onSignupPress: () => void;
+  onInvitePress: () => void;
+  onForgotPress: () => void;
 }
 
-export default function LoginPage({ onSignupPress }: LoginPageProps) {
-  const [username, setUsername] = useState("");
+export default function LoginPage({ onInvitePress, onForgotPress }: LoginPageProps) {
+  const [mode, setMode] = useState<Mode>("email");
+  const [email, setEmail] = useState("");
+  const [orgSlug, setOrgSlug] = useState("");
+  const [employeeCode, setEmployeeCode] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
-  const context = useContext(AppContext);
-
-  if (!context) {
-    throw new Error('LoginPage must be used within an AppProvider');
-  }
-
-  const { setIsLoggedIn, setConsentRequired, setFaceEnrolled } = context;
+  const { startSession, authNotice, clearAuthNotice } = useContext(AppContext);
 
   const handleLogin = async () => {
-    if (!username || !password) {
-      Alert.alert('Error', 'Please enter both username and password');
+    const missing = mode === "email" ? !email.trim() : !orgSlug.trim() || !employeeCode.trim();
+    if (missing || !password) {
+      setError(mode === "email" ? "Enter your email and password." : "Enter your company code, employee ID and password.");
       return;
     }
-
+    setError(null);
     setLoading(true);
     try {
-      const data = await apiFetch(API_CONFIG.ENDPOINTS.LOGIN, {
-        json: { employee_id: username.trim(), password },
-        token: "",
-      });
-      if (!data.office) {
-        Alert.alert("No office", "Your account is not assigned to an office yet. Ask your admin.");
-        return;
-      }
-      await saveSession(data);
-      setConsentRequired(Boolean(data.consent_required));
-      setFaceEnrolled(Boolean(data.face_enrolled));
-      setIsLoggedIn(true);
+      if (mode === "email") await loginWithEmail(email, password);
+      else await loginWithEmployeeCode(orgSlug, employeeCode, password);
+      await startSession();
       router.replace("/(tabs)/user_dashboard");
-    } catch (error: any) {
-      if (error instanceof ApiError) {
-        Alert.alert("Login Failed", error.message);
-      } else {
-        console.error("Login error:", error);
-        Alert.alert("Error", "Failed to connect to the server. Please try again.");
-      }
+    } catch (e) {
+      setError(errorMessage(e, "Could not sign in. Please try again."));
     } finally {
       setLoading(false);
     }
@@ -59,109 +47,99 @@ export default function LoginPage({ onSignupPress }: LoginPageProps) {
   return (
     <View style={styles.container}>
       <View style={styles.content}>
-        <Text style={styles.title}>Welcome Back</Text>
-        <Text style={styles.subtitle}>Sign in to continue</Text>
-        
+        <Text style={styles.title}>Attendify</Text>
+        <Text style={styles.subtitle}>Sign in with the account your company created for you</Text>
+
+        {authNotice ? (
+          <View style={styles.notice}>
+            <Text style={styles.noticeText}>{authNotice}</Text>
+          </View>
+        ) : null}
+
+        <View style={styles.modeRow}>
+          {(["email", "code"] as Mode[]).map((m) => (
+            <TouchableOpacity
+              key={m}
+              style={[styles.modeButton, mode === m && styles.modeButtonActive]}
+              onPress={() => {
+                setMode(m);
+                setError(null);
+              }}
+              disabled={loading}
+            >
+              <Text style={[styles.modeText, mode === m && styles.modeTextActive]}>
+                {m === "email" ? "Email" : "Company code"}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
         <View style={styles.inputContainer}>
-          <TextInput
-            style={styles.input}
-            placeholder="Employee ID or email"
-            value={username}
-            onChangeText={setUsername}
-            autoCapitalize="none"
-            editable={!loading}
-          />
+          {mode === "email" ? (
+            <TextInput
+              style={styles.input}
+              placeholder="Email"
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              autoComplete="email"
+              keyboardType="email-address"
+              editable={!loading}
+            />
+          ) : (
+            <>
+              <TextInput
+                style={styles.input}
+                placeholder="Company code"
+                value={orgSlug}
+                onChangeText={setOrgSlug}
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!loading}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Employee ID"
+                value={employeeCode}
+                onChangeText={setEmployeeCode}
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!loading}
+              />
+            </>
+          )}
           <TextInput
             style={styles.input}
             placeholder="Password"
             value={password}
             onChangeText={setPassword}
             secureTextEntry
+            autoComplete="current-password"
             editable={!loading}
+            onSubmitEditing={handleLogin}
           />
         </View>
 
-        <TouchableOpacity
-          style={[styles.button, loading && styles.buttonDisabled]}
-          onPress={handleLogin}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.buttonText}>Sign In</Text>
-          )}
-        </TouchableOpacity>
+        {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <TouchableOpacity
-          onPress={onSignupPress}
+          style={[styles.button, loading && styles.buttonDisabled]}
+          onPress={() => {
+            clearAuthNotice();
+            handleLogin();
+          }}
           disabled={loading}
         >
-          <Text style={styles.signupText}>Don't have an account? Sign up</Text>
+          {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Sign In</Text>}
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={onForgotPress} disabled={loading}>
+          <Text style={styles.link}>Forgot password?</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={onInvitePress} disabled={loading}>
+          <Text style={styles.link}>I have an invite code</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F4E9FD',
-  },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    marginBottom: 10,
-    color: '#5B3B8E',
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#6A4CAF',
-    marginBottom: 40,
-  },
-  inputContainer: {
-    width: '100%',
-    marginBottom: 20,
-  },
-  input: {
-    width: '100%',
-    height: 50,
-    borderWidth: 1,
-    borderColor: '#D9C2F0',
-    borderRadius: 8,
-    paddingHorizontal: 15,
-    marginBottom: 15,
-    fontSize: 16,
-    backgroundColor: '#fff',
-    color: '#5B3B8E',
-  },
-  button: {
-    width: '100%',
-    height: 50,
-    backgroundColor: '#6A4CAF',
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 15,
-  },
-  buttonDisabled: {
-    opacity: 0.7,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  signupText: {
-    color: '#6A4CAF',
-    fontSize: 16,
-    textDecorationLine: 'underline',
-  },
-});

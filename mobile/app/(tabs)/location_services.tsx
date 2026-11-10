@@ -11,49 +11,23 @@ import MapView, { Marker, Circle, PROVIDER_GOOGLE } from "react-native-maps";
 import { Redirect, useNavigation } from "expo-router";
 import * as Location from "expo-location";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useEffect, useRef, useState, useContext } from "react";
+import { useEffect, useMemo, useRef, useState, useContext } from "react";
 import haversine from "haversine-distance";
-import * as SecureStore from "expo-secure-store";
 import { AppContext } from "@/context/AppContext";
 
 export default function LocationServices() {
-  const { handleEntry, handleExit, locationPermissions } = useContext(AppContext);
+  const { handleEntry, handleExit, locationPermissions, office } = useContext(AppContext);
   const [locationPermission, setLocationPermission] = useState(false);
-  const [officeLocation, setOfficeLocation] = useState({
-    latitude: 0,
-    longitude: 0,
-    radius: 0,
-    name: '',
-  });
-
-  useEffect(() => {
-    const loadOfficeLocation = async () => {
-      try {
-        const [latitude, longitude, radius, name] = await Promise.all([
-          SecureStore.getItemAsync("office_latitude"),
-          SecureStore.getItemAsync("office_longitude"),
-          SecureStore.getItemAsync("office_radius"),
-          SecureStore.getItemAsync("office_name"),
-        ]);
-
-        if (latitude && longitude && radius) {
-          setOfficeLocation({
-            latitude: parseFloat(latitude),
-            longitude: parseFloat(longitude),
-            radius: parseFloat(radius),
-            name: name || 'Office',
-          });
-        } else {
-          Alert.alert("Error", "Office location not found. Please log in again.");
-        }
-      } catch (error) {
-        console.error("Error loading office location:", error);
-        Alert.alert("Error", "Failed to load office location. Please try again.");
-      }
-    };
-
-    loadOfficeLocation();
-  }, []);
+  // The office comes from the profile (/people/me -> /places/offices/{id}).
+  const officeLocation = useMemo(
+    () => ({
+      latitude: office?.latitude ?? 0,
+      longitude: office?.longitude ?? 0,
+      radius: office?.radius_m ?? 0,
+      name: office?.name || "Office",
+    }),
+    [office]
+  );
 
   // Watch the phone's position and tell the app when we cross the office boundary.
   // The server re-checks the distance on check-in, so this only decides *when* to ask.
@@ -73,20 +47,16 @@ export default function LocationServices() {
       subscription = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 5 },
         (location) => {
-          const coords = {
-            latitude: location.coords.latitude,
-            longitude: location.coords.longitude,
-            accuracy: location.coords.accuracy,
-          };
+          const coords = location.coords;
           const distance = haversine(
             { latitude: officeLocation.latitude, longitude: officeLocation.longitude },
             coords
           );
           const inside = distance <= officeLocation.radius;
           if (inside && wasInside !== true) {
-            handleEntry(coords);
+            handleEntry(location);
           } else if (!inside && wasInside !== false) {
-            handleExit(coords);
+            handleExit(location);
           }
           wasInside = inside;
         }
@@ -134,7 +104,7 @@ export default function LocationServices() {
   if (!officeLocation.latitude || !officeLocation.longitude) {
     return (
       <View style={styles.loadingContainer}>
-        <Text>Loading office location...</Text>
+        <Text>{office ? "Loading office location..." : "No office is assigned to you yet. Ask your admin."}</Text>
       </View>
     );
   }
