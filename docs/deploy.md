@@ -12,12 +12,54 @@ Cloudflare Pages  (admin SPA, /download, and the /api proxy Function)
 AWS Lambda Function URL (ap-south-1, container image, FastAPI)
       |
       v
-MongoDB Atlas
+PostgreSQL (Supabase / Neon / RDS, via a transaction pooler)
 ```
 
-Detail pages: `infra/aws/README.md`, `infra/cloudflare/README.md`. Tools you need locally: `git`, Docker, `uv`, Node 22, AWS CLI, AWS SAM CLI, and accounts on AWS, Cloudflare, MongoDB Atlas, GitHub and Expo (expo.dev).
+Detail pages: `infra/aws/README.md`, `infra/cloudflare/README.md`. Tools you need locally: `git`, Docker, `uv`, Node 22, AWS CLI, AWS SAM CLI, and accounts on AWS, Cloudflare, a managed PostgreSQL provider, GitHub and Expo (expo.dev).
 
-## 1. MongoDB Atlas
+## 0. PostgreSQL (backend v5, replaces the MongoDB steps below)
+
+The v5 backend (`docs/architecture-v5.md`) uses PostgreSQL 16 only. Sections 1 and 5 below describe
+the old MongoDB setup and are superseded by this section; the rest of the runbook still applies.
+
+1. Create a Postgres 16 database (Supabase, Neon or RDS). From Lambda use the provider's
+   **transaction-mode pooler** endpoint (Supabase pooler port 6543, Neon pooled host, RDS Proxy).
+   The app already disables asyncpg's prepared statement cache (`statement_cache_size=0`) and only
+   sets tenant context with `SET LOCAL` inside a transaction, which is what transaction poolers
+   require. Set `DB_NULL_POOL=true` for Lambda (the template does) so the app keeps no pool of its own.
+2. Run migrations as the **owner** role over a **direct** (non-pooled) connection, from your machine
+   or CI:
+
+   ```bash
+   cd backend
+   export DATABASE_OWNER_URL='postgresql://postgres:OWNER_PASSWORD@db-host:5432/postgres'
+   export ATTENDIFY_APP_PASSWORD='<random>' ATTENDIFY_SYSTEM_PASSWORD='<random>'
+   uv run alembic upgrade head
+   ```
+
+   The first migration creates the two login roles if they do not exist and, when the two password
+   variables are set, sets their passwords. It also creates every table, the row level security
+   policies (`FORCE ROW LEVEL SECURITY`) and all grants.
+3. The two roles. `attendify_app` serves requests: not the table owner, no `BYPASSRLS`, every
+   transaction starts with `SET LOCAL app.org_id`. `attendify_system` has `BYPASSRLS` and is used only
+   by org signup, pre-login auth lookups (login, refresh, reset, invite) and desk device-token calls.
+   If your provider does not let the migration user create a `BYPASSRLS` role (Supabase: use the
+   dashboard SQL editor as `postgres`), create them first and re-run the migration:
+
+   ```sql
+   CREATE ROLE attendify_app LOGIN PASSWORD '...' NOBYPASSRLS;
+   CREATE ROLE attendify_system LOGIN PASSWORD '...' BYPASSRLS;
+   ```
+
+   Supabase pooler user names look like `attendify_app.<project-ref>`; put that in the URL.
+4. Lambda environment (the SAM template parameters): `DATABASE_URL` (app role, pooler),
+   `DATABASE_SYSTEM_URL` (system role, pooler), `DATA_KEY` (base64 of 32 random bytes; encrypts device
+   secrets, losing it means re-pairing all desk apps), `JWT_SECRET`, `INTERNAL_JOB_SECRET`.
+5. Seed demo data (optional, never in production): `uv run python -m scripts.seed` with the same
+   `DATABASE_URL` / `DATABASE_SYSTEM_URL`. Real customers sign up with `POST /api/v1/orgs/signup`.
+6. Backups: use the provider's point-in-time recovery; the database is the only state.
+
+## 1. MongoDB Atlas (superseded, see section 0)
 
 1. Create an Atlas project and a cluster. Start with **M0 (free)** on AWS `ap-south-1` (Mumbai); upgrade to M10 later (see costs).
 2. Database Access, Add New Database User: username `attendify_app`, authentication "Password", click Autogenerate Secure Password and copy it. Built-in role: **Only read and write to a specific database** with database `attendify`. Do not give it Atlas admin.

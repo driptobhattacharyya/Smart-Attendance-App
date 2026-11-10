@@ -3,10 +3,26 @@ Transform: AWS::Serverless-2016-10-31
 Description: Attendify API - FastAPI on AWS Lambda (container image + Lambda Web Adapter) behind a Function URL
 
 Parameters:
-  MongoUri:
+  DatabaseUrl:
     Type: String
     NoEcho: true
-    Description: MongoDB Atlas connection string (mongodb+srv://user:pass@cluster/...)
+    Description: >-
+      PostgreSQL URL for the attendify_app role (RLS-restricted), through a transaction pooler,
+      e.g. postgresql://attendify_app:PASSWORD@pooler-host:6543/postgres
+  DatabaseSystemUrl:
+    Type: String
+    NoEcho: true
+    Description: PostgreSQL URL for the attendify_system role (BYPASSRLS; signup, login lookup, desk device auth)
+  DataKey:
+    Type: String
+    NoEcho: true
+    MinLength: 44
+    Description: base64 of 32 random bytes (python -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())"); encrypts device secrets at rest
+  InternalJobSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Shared secret for /api/v1/internal/* scheduled jobs (EventBridge)
   JwtSecret:
     Type: String
     NoEcho: true
@@ -17,11 +33,7 @@ Parameters:
     NoEcho: true
     MinLength: 32
     Description: Shared secret the Cloudflare proxy sends as X-Origin-Auth (same value as ORIGIN_SECRET in Pages)
-  MongoDb:
-    Type: String
-    Default: attendify
-    Description: Database name inside the Atlas cluster
-  AllowSelfRegistration:
+  AllowSignup:
     Type: String
     Default: "true"
     AllowedValues: ["true", "false"]
@@ -53,12 +65,15 @@ Resources:
       Environment:
         Variables:
           ENVIRONMENT: production
-          MONGODB_URI: !Ref MongoUri
-          MONGODB_DB: !Ref MongoDb
+          DATABASE_URL: !Ref DatabaseUrl
+          DATABASE_SYSTEM_URL: !Ref DatabaseSystemUrl
+          DATA_KEY: !Ref DataKey
+          INTERNAL_JOB_SECRET: !Ref InternalJobSecret
+          DB_NULL_POOL: "true" # Lambda in front of a transaction pooler: no client-side pool
           JWT_SECRET: !Ref JwtSecret
           ORIGIN_SECRET: !Ref OriginSecret
           CORS_ORIGINS: !Ref PublicOrigin
-          ALLOW_SELF_REGISTRATION: !Ref AllowSelfRegistration
+          ALLOW_SIGNUP: !Ref AllowSignup
       FunctionUrlConfig:
         AuthType: NONE # protected by the X-Origin-Auth shared secret inside the app
         InvokeMode: BUFFERED
