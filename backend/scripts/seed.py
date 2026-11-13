@@ -5,21 +5,27 @@ employees in two offices and three departments, tags and desk apps.
     uv run python -m scripts.seed
 
 Needs DATABASE_URL (attendify_app) and DATABASE_SYSTEM_URL (attendify_system). Safe to re-run:
-does nothing if the demo organization already exists. Attendance demo data arrives with step 2.
+does nothing if the demo organization already exists. Also adds 14 days of events, driven
+through the real engine.
 """
 
 from __future__ import annotations
 
 import asyncio
+import random
 import sys
 import uuid
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 
+from app.attendance.models import Request
+from app.attendance.store import append_event, recompute_days
 from app.auth.deps import Ctx, Principal
 from app.core.config import Settings, get_settings
 from app.core.db import Database
-from app.core.security import PasswordHasher
+from app.core.security import PasswordHasher, utcnow
 from app.people import service as people
 from app.people.schemas import UserCreate
 from app.places import service as places
@@ -70,6 +76,133 @@ EMPLOYEES = [
     ("Kavya Reddy", 1, 2),
     ("Lalit Verma", 1, 0),
 ]  # (name, office index, department index)
+
+
+async def seed_attendance(ctx, employees, managers, offices, org) -> dict:
+    """Fourteen past days of events per employee, never inserted as days: every event goes
+    through ``append_event`` and the rows of ``attendance_days`` come out of ``recompute_days``."""
+    rng = random.Random(7)
+    now = utcnow()
+    today = now.date()
+    stats = {"events": 0, "late_arrivals": 0}
+    leave_user, wfh_user, corr_user = employees[2], employees[3], employees[4]
+    days = [today - timedelta(days=n) for n in range(14, 0, -1)]
+    workdays = [d for d in days if d.weekday() < 5]
+    leave_days = workdays[-6:-4]
+    wfh_day = workdays[-3]
+    corr_day = workdays[-2]
+    boss = managers[0]
+
+    def instant(day, hh, mm, tz):
+        return datetime.combine(day, time(hh, mm), tzinfo=tz).astimezone(ZoneInfo("UTC"))
+
+    for emp in employees:
+        office = next(o for o in offices if o.id == emp.office_id)
+        tz = ZoneInfo(office.timezone)
+        start_t = office.work_start or time(9, 0)
+        for day in workdays:
+            if emp is leave_user and day in leave_days:
+                continue
+            if rng.random() < 0.04:
+                continue  # an unexplained absence
+            remote = emp is wfh_user and day == wfh_day
+            late = rng.random() < 0.25
+            minutes = rng.randint(15, 40) if late else rng.randint(-20, 8)
+            stats["late_arrivals"] += late
+            start = instant(day, start_t.hour, start_t.minute, tz) + timedelta(minutes=minutes)
+            end = start + timedelta(hours=8, minutes=rng.randint(10, 80))
+            sid = uuid.uuid4()
+            await append_event(
+                ctx.db,
+                org_id=ctx.org_id,
+                user_id=emp.id,
+                type="remote_check_in" if remote else "check_in",
+                occurred_at=start,
+                source="app",
+                day=day,
+                session_id=sid,
+                event_id=sid,
+                payload={"mode": "remote" if remote else "office", "integrity": "unverified"},
+            )
+            stats["events"] += 1
+            if rng.random() < 0.5:  # lunch away from the desk
+                gone = start + timedelta(hours=3, minutes=rng.randint(0, 30))
+                for at, state in (
+                    (gone, "away"),
+                    (gone + timedelta(minutes=rng.randint(25, 60)), "present"),
+                ):
+                    await append_event(
+                        ctx.db,
+                        org_id=ctx.org_id,
+                        user_id=emp.id,
+                        type="presence_changed",
+                        occurred_at=at,
+                        source="app",
+                        day=day,
+                        session_id=sid,
+                        payload={
+                            "state": state,
+                            "reason": "no_signal" if state == "away" else "near",
+                        },
+                    )
+                    stats["events"] += 1
+            auto = rng.random() < 0.06  # forgot to check out
+            await append_event(
+                ctx.db,
+                org_id=ctx.org_id,
+                user_id=emp.id,
+                type="auto_check_out" if auto else "check_out",
+                occurred_at=end,
+                source="system" if auto else "app",
+                day=day,
+                session_id=sid,
+                payload={"reason": "stale"} if auto else {},
+            )
+            stats["events"] += 1
+
+    def request(user, kind, **kw):
+        return Request(id=uuid.uuid4(), org_id=ctx.org_id, user_id=user.id, kind=kind, **kw)
+
+    ctx.db.add_all(
+        [
+            request(
+                leave_user,
+                "leave",
+                start_date=leave_days[0],
+                end_date=leave_days[-1],
+                reason="Family wedding",
+                status="approved",
+                decided_by=boss.id,
+                decided_at=now,
+                comment="Enjoy",
+            ),
+            request(
+                wfh_user,
+                "wfh",
+                start_date=wfh_day,
+                end_date=wfh_day,
+                reason="Plumber visit",
+                status="approved",
+                decided_by=boss.id,
+                decided_at=now,
+            ),
+            request(
+                corr_user,
+                "correction",
+                start_date=corr_day,
+                end_date=corr_day,
+                entry_time=time(9, 30),
+                exit_time=time(18, 0),
+                reason="Forgot to check in",
+                status="pending",
+            ),
+        ]
+    )
+    await ctx.db.flush()
+    for emp in employees:
+        office = next(o for o in offices if o.id == emp.office_id)
+        await recompute_days(ctx.db, emp, days, now=now, office=office)
+    return stats
 
 
 def _slug(name: str) -> str:
@@ -171,6 +304,8 @@ async def seed(
                     ),
                 )
             )
+        db_org.modules = {**db_org.modules, "wfh": True}
+        attendance = await seed_attendance(ctx, employees, [mgr1, mgr2], offices, db_org)
         code, _ = await places.create_pairing_code(ctx, desk_apps[0].id)
         return {
             "org_slug": org.slug,
@@ -179,6 +314,7 @@ async def seed(
             "users": 1 + 1 + 2 + len(employees),
             "offices": len(offices),
             "departments": len(depts),
+            "attendance": attendance,
             "desk_pairing_code": code,
             "desk_device_id": str(desk_apps[0].id),
         }

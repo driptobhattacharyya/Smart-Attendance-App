@@ -31,6 +31,23 @@ async def test_seed_builds_the_demo_org_and_is_rerunnable(app, client, settings,
     h = {"Authorization": f"Bearer {mgr.json()['access_token']}"}
     team = (await client.get(f"{API}/people?limit=200", headers=h)).json()["items"]
     assert len(team) == 13  # 6 direct employees + Manoj + his 6 employees
+    # Attendance came out of the real engine: days exist, with late arrivals, leave and WFH.
+    assert await owner_conn.fetchval("SELECT count(*) FROM attendance_events") > 100
+    statuses = {
+        r["status"] for r in await owner_conn.fetch("SELECT DISTINCT status FROM attendance_days")
+    }
+    assert {"present", "on_leave"} <= statuses
+    assert (
+        await owner_conn.fetchval("SELECT count(*) FROM attendance_days WHERE late_minutes > 0") > 5
+    )
+    assert (
+        await owner_conn.fetchval("SELECT count(*) FROM attendance_days WHERE flags ? 'remote'")
+        == 1
+    )
+    assert await owner_conn.fetchval("SELECT count(*) FROM requests WHERE status = 'pending'") == 1
+    assert await owner_conn.fetchval("SELECT count(*) FROM requests WHERE status = 'approved'") == 2
+    board = await client.get(f"{API}/reports/dashboard", headers=h)
+    assert board.status_code == 200 and board.json()["pending_requests"] == 1
     # Pairing code printed by the seed works for the desk app.
     paired = await client.post(f"{API}/desk/pair", json={"code": summary["desk_pairing_code"]})
     assert paired.status_code == 200

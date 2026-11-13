@@ -5,10 +5,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Response
 
+from ...attendance import export
 from ...auth.deps import Ctx, CurrentCtx
 from ...auth.schemas import MessageOut, SessionOut
 from ...auth.service import list_sessions
-from ...attendance import export
 from ...core.pagination import Page
 from ...people import service
 from ...people.schemas import (

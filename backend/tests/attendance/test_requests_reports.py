@@ -539,8 +539,8 @@ async def test_csv_export_is_formula_safe_and_local_time(world, client, owner_co
     assert "attachment" in r.headers["content-disposition"]
     lines = r.text.strip().splitlines()
     assert lines[0].startswith("employee_code,name,office,date,status,first_in")
-    assert any(l.split(",")[1].startswith("'=") or "'=HYPERLINK" in l for l in lines[1:])
-    assert not any(l.startswith("=") or ",=" in l for l in lines)
+    assert any(row.split(",")[1].startswith("'=") or "'=HYPERLINK" in row for row in lines[1:])
+    assert not any(row.startswith("=") or ",=" in row for row in lines)
     utc_hhmm = await owner_conn.fetchval(
         "SELECT to_char(first_in AT TIME ZONE 'Asia/Kolkata', 'HH24:MI') FROM attendance_days LIMIT 1"
     )
@@ -568,3 +568,34 @@ async def test_csv_export_is_formula_safe_and_local_time(world, client, owner_co
         f"{API}/reports/export.csv?start={TODAY}&end={TODAY}", headers=world.headers["lead"]
     )
     assert "Direct" not in lead.text
+
+
+async def test_policy_is_seeded_at_signup_and_versioned(world, client, owner_conn):
+    assert await owner_conn.fetchval("SELECT count(*) FROM attendance_policies") == 1
+    h = world.headers["emp1"]
+    eff = (await client.get(f"{API}/attendance/policy", headers=h)).json()
+    assert eff["rules"]["counting"] == "presence" and eff["rules"]["full_day_minutes"] == 480
+    assert (await client.get(f"{API}/attendance/policies", headers=h)).status_code == 403
+    tomorrow = (TODAY + timedelta(days=1)).isoformat()
+    r = await client.post(
+        f"{API}/attendance/policies",
+        json={"effective_from": tomorrow, "rules": {"counting": "span", "full_day_minutes": 420}},
+        headers=world.headers["admin"],
+    )
+    assert r.status_code == 201 and r.json()["rules"]["counting"] == "span"
+    cur = (await client.get(f"{API}/attendance/policy", headers=h)).json()
+    assert cur["rules"]["counting"] == "presence"
+    versions = (await client.get(f"{API}/attendance/policies", headers=world.owner_headers)).json()
+    assert len(versions) == 2
+    old = await client.post(
+        f"{API}/attendance/policies",
+        json={"effective_from": "2020-01-01", "rules": {}},
+        headers=world.owner_headers,
+    )
+    assert err(old) == "policy_in_past"
+    bad = await client.post(
+        f"{API}/attendance/policies",
+        json={"effective_from": tomorrow, "rules": {"half_day_minutes": 900}},
+        headers=world.owner_headers,
+    )
+    assert bad.status_code == 422
