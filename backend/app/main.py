@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api.v1 import api_router
+from .attendance.trust import build_integrity_verifier
 from .core.config import Settings, get_settings
 from .core.db import Database
 from .core.email import build_email_sender
@@ -34,6 +35,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.db = Database(settings)
     app.state.hasher = PasswordHasher(settings)
     app.state.email = build_email_sender(settings)
+    # Pluggable collaborators; tests replace them. The face provider is built lazily on first
+    # use (loading the models takes seconds).
+    app.state.integrity_verifier = build_integrity_verifier(settings)
+    app.state.face_provider = None
 
     install_error_handlers(app)
     app.add_middleware(

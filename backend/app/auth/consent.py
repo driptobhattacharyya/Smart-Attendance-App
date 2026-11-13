@@ -7,6 +7,7 @@ from pathlib import Path
 
 from sqlalchemy import func, select, update
 
+from ..attendance.lifecycle import end_open_session
 from ..core.config import Settings
 from ..core.errors import conflict
 from ..tenancy.models import Organization
@@ -88,6 +89,8 @@ async def withdraw_consent(ctx: Ctx) -> None:
         .values(withdrawn_at=func.now())
     )
     if result.rowcount:
+        # Tracking stops straight away: the user is checked out by the system.
+        await end_open_session(ctx.db, ctx.org_id, ctx.user_id, reason="consent_withdrawn")
         await ctx.audit("consent.withdraw", "user", ctx.user_id)
 
 

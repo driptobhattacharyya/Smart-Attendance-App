@@ -77,6 +77,19 @@ class Settings(BaseSettings):
     desk_pairing_ttl_minutes: int = Field(default=15, ge=1)
     desk_heartbeat_interval_seconds: int = Field(default=60, ge=1)
     presence_retention_days: int = Field(default=90, ge=1)
+    # --- attendance ---------------------------------------------------------------------
+    heartbeat_interval_seconds: int = Field(default=60, ge=5)
+    # A face scan is good for one check-in within this many minutes.
+    face_verification_ttl_minutes: int = Field(default=10, ge=1)
+    # A desk app that has not reported for this long counts as offline.
+    desk_offline_after_seconds: int = Field(default=180, ge=10)
+    # --- Play Integrity (docs/architecture-v5.md section 8) -------------------------------
+    play_integrity_enabled: bool = False
+    play_integrity_package_name: str = ""
+    # Comma-separated base64url SHA-256 digests of the app signing certificate(s).
+    play_integrity_cert_sha256: str = ""
+    # Google service account JSON (the content, not a path) with the Play Integrity API role.
+    play_integrity_service_account_json: str = ""
     # Used only to word the consent text; the face package owns the real configuration.
     face_provider: Literal["opencv", "azure"] = "opencv"
 

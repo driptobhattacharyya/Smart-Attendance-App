@@ -117,6 +117,47 @@
       "Resource": "arn:aws:logs:ap-south-1:<ACCOUNT_ID>:log-group:/aws/lambda/attendify-api-*"
     },
     {
+      "Sid": "ScheduledJobs",
+      "Effect": "Allow",
+      "Action": [
+        "events:PutRule",
+        "events:DeleteRule",
+        "events:DescribeRule",
+        "events:PutTargets",
+        "events:RemoveTargets",
+        "events:CreateConnection",
+        "events:UpdateConnection",
+        "events:DeleteConnection",
+        "events:DescribeConnection",
+        "events:CreateApiDestination",
+        "events:UpdateApiDestination",
+        "events:DeleteApiDestination",
+        "events:DescribeApiDestination",
+        "events:TagResource",
+        "events:UntagResource",
+        "events:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:events:ap-south-1:<ACCOUNT_ID>:rule/attendify-api-*",
+        "arn:aws:events:ap-south-1:<ACCOUNT_ID>:connection/attendify-api-*",
+        "arn:aws:events:ap-south-1:<ACCOUNT_ID>:api-destination/attendify-api-*"
+      ]
+    },
+    {
+      "Sid": "ConnectionSecret",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:TagResource"
+      ],
+      "Resource": "arn:aws:secretsmanager:ap-south-1:<ACCOUNT_ID>:secret:events!connection/attendify-api-*"
+    },
+    {
       "Sid": "LogGroupDescribe",
       "Effect": "Allow",
       "Action": "logs:DescribeLogGroups",

@@ -49,6 +49,11 @@ class Ctx:
     ip: str | None = None
     user_agent: str | None = None
     outbox: Outbox = field(default_factory=Outbox)
+    # ``database`` lets a service write something that must survive the request's rollback (an
+    # audit row for a rejected attempt); ``state`` is ``app.state`` (face provider, integrity
+    # verifier). Both are None for contexts built by scripts.
+    database: Database | None = None
+    state: Any = None
 
     @property
     def org_id(self) -> uuid.UUID:
@@ -153,6 +158,8 @@ async def get_ctx(
             hasher=request.app.state.hasher,
             ip=client_ip(request),
             user_agent=request.headers.get("user-agent"),
+            database=database,
+            state=request.app.state,
         )
         yield ctx
     # The transaction has committed here. Only now do queued emails go out.

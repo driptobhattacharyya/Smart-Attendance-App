@@ -33,9 +33,23 @@ class OrgBrief(BaseModel):
     modules: dict[str, Any]
 
 
+class OfficeBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    latitude: float
+    longitude: float
+    radius_m: int
+    timezone: str
+
+
 class MeOut(UserOut):
     permissions: list[str]
     org: OrgBrief
+    modules: dict[str, Any] = Field(default_factory=dict)
+    office: OfficeBrief | None = None
+    face_enrolled: bool = False
     consent_required: bool
     consent_version: int
 

@@ -9,6 +9,8 @@ from datetime import timedelta
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from ..attendance.models import AttendancePolicy
+from ..attendance.rules import DEFAULT_RULES, SIGNUP_POLICY_EFFECTIVE_FROM
 from ..audit.service import write_audit
 from ..auth import ratelimit
 from ..auth.sessions import issue_session
@@ -91,6 +93,14 @@ async def signup_org(
             )
             s.add(owner)
             await s.flush()
+            s.add(
+                AttendancePolicy(
+                    org_id=org.id,
+                    effective_from=SIGNUP_POLICY_EFFECTIVE_FROM,
+                    rules=DEFAULT_RULES.to_json(),
+                    created_by=owner.id,
+                )
+            )
             tokens, _ = await issue_session(
                 s,
                 settings,
