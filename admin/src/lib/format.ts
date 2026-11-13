@@ -1,4 +1,4 @@
-import type { PresenceReason, PresenceStatus, SessionState } from "./types";
+import type { PresenceReason, PresenceStatus, SessionState } from "../api/attendance";
 
 export function formatMinutes(total: number | null | undefined, empty = "—"): string {
   if (!total || total < 0) return empty;

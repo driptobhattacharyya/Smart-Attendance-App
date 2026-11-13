@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
-import { useQuery } from "@tanstack/react-query";
 import { RefreshCw, Users } from "lucide-react";
-import { api } from "../lib/api";
-import type { PresenceRow, PresenceStatus } from "../lib/types";
+import { usePresence } from "../api/attendance";
+import type { PresenceStatus } from "../api/attendance";
 import { fmtTime, formatMinutes, REASON_LABEL, signalLevel, STATUS_LABEL, timeAgo } from "../lib/format";
 import { officeName, useOffices } from "../lib/queries";
 import { Avatar, Card, ChipGroup, EmptyState, ErrorState, PageHeader, SignalBars, StatusBadge, Table, TableSkeleton, Td, Th } from "../ui/misc";
@@ -22,13 +21,7 @@ export function Live() {
   const [now, setNow] = useState(() => Date.now());
   const offices = useOffices();
 
-  const q = useQuery({
-    queryKey: ["presence", office],
-    queryFn: () => api<PresenceRow[]>(`/manager/presence${office ? `?office_id=${encodeURIComponent(office)}` : ""}`),
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false, // pauses while the tab is hidden
-    staleTime: 10_000,
-  });
+  const q = usePresence(office);
 
   // Keep "x min ago" honest between refreshes.
   useEffect(() => {
@@ -53,7 +46,7 @@ export function Live() {
     return (rows ?? []).filter(
       (r) =>
         (filter === "all" || r.status === filter) &&
-        (!term || r.name.toLowerCase().includes(term) || r.employee_id.toLowerCase().includes(term)),
+        (!term || r.name.toLowerCase().includes(term) || r.employee_code.toLowerCase().includes(term)),
     );
   }, [rows, filter, search]);
 
@@ -147,14 +140,14 @@ export function Live() {
             </thead>
             <tbody>
               {visible.map((r) => (
-                <tr key={r.employee_id} className="hover:bg-surface-2/50">
+                <tr key={r.user_id} className="hover:bg-surface-2/50">
                   <Td>
                     <div className="flex items-center gap-3">
                       <Avatar name={r.name} />
                       <div className="min-w-0">
                         <p className="truncate font-medium">{r.name}</p>
                         <p className="text-xs text-muted">
-                          {r.employee_id}
+                          {r.employee_code}
                           <span className="sm:hidden"> · {formatMinutes(r.today_minutes, "0m")} today</span>
                         </p>
                       </div>

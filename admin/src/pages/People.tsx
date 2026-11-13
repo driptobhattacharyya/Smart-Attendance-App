@@ -1,101 +1,137 @@
 import { useMemo, useState } from "react";
-import { useSearchParams } from "react-router";
+import type { FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bluetooth, Pencil, ScanFace, UserPlus, Users } from "lucide-react";
-import { api } from "../lib/api";
-import type { Beacon, Office, Role, User } from "../lib/types";
-import { officeName, useBeacons, useOffices, usePeople } from "../lib/queries";
+import { Building, Mail, Pencil, Trash2, UserPlus, Users } from "lucide-react";
+import { api } from "../api/client";
+import type { Department, Office, User } from "../api/types";
+import { P, ROLE_OPTIONS, roleLabel } from "../api/types";
+import { departmentName, officeName, useDebounced, useDepartments, useOffices, usePeopleList, usePeopleNames } from "../lib/queries";
+import { timeAgo } from "../lib/format";
 import { useAuth } from "../lib/auth";
 import { useToast } from "../lib/toast";
 import { Avatar, Badge, Card, ChipGroup, EmptyState, ErrorState, PageHeader, Table, TableSkeleton, Td, Th } from "../ui/misc";
+import type { Tone } from "../ui/misc";
 import { Button, IconButton } from "../ui/Button";
-import { Field, Input, SearchInput, Select, Switch } from "../ui/form";
+import { Field, Input, SearchInput, Select } from "../ui/form";
 import { Dialog } from "../ui/Dialog";
+import { PersonPicker } from "../ui/PersonPicker";
 
-type Setup = "all" | "no-face" | "no-beacon" | "inactive";
-type BeaconState = "assigned" | "shared" | "none";
+type StatusFilter = "all" | "active" | "invited" | "disabled";
+type Scope = "team" | "direct";
 
-const ROLE_TONE = { admin: "accent", manager: "info", employee: "neutral" } as const;
-
-function beaconState(u: User, beacons: Beacon[]): BeaconState {
-  const active = beacons.filter((b) => b.active);
-  if (active.some((b) => b.assigned_employee_id === u.employee_id)) return "assigned";
-  if (active.some((b) => !b.assigned_employee_id && b.office_id === u.office_id)) return "shared";
-  return "none";
-}
+const ROLE_TONE: Record<string, Tone> = { owner: "violet", admin: "accent", manager: "info", employee: "neutral" };
+const STATUS_TONE: Record<string, Tone> = { active: "success", invited: "warn", disabled: "neutral" };
+const STATUS_LABEL: Record<string, string> = { active: "Active", invited: "Invited", disabled: "Disabled" };
 
 export function People() {
-  const { user: me } = useAuth();
-  const admin = me?.role === "admin";
-  const [params, setParams] = useSearchParams();
-  const initial = params.get("setup") as Setup | null;
-  const [setup, setSetup] = useState<Setup>(initial && ["no-face", "no-beacon", "inactive"].includes(initial) ? initial : "all");
+  const { me, can } = useAuth();
+  const manage = can(P.peopleManage);
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [scope, setScope] = useState<Scope>("team");
   const [search, setSearch] = useState("");
+  const [department, setDepartment] = useState("");
+  const [office, setOffice] = useState("");
   const [editing, setEditing] = useState<User | null>(null);
-  const [adding, setAdding] = useState(false);
-  const [resetting, setResetting] = useState<User | null>(null);
+  const [inviting, setInviting] = useState(false);
+  const [departmentsOpen, setDepartmentsOpen] = useState(false);
 
-  const people = usePeople();
+  const q = useDebounced(search.trim());
+  const filters = {
+    q,
+    status: status === "all" ? "" : status,
+    department_id: department,
+    office_id: office,
+    manager_id: !manage && scope === "direct" ? me?.id : "",
+  };
+  const people = usePeopleList(filters);
   const offices = useOffices();
-  const beacons = useBeacons();
+  const departments = useDepartments();
 
-  const rows = useMemo(() => {
-    const list = people.data ?? [];
-    return list.map((u) => ({ u, beacon: beaconState(u, beacons.data ?? []) }));
-  }, [people.data, beacons.data]);
+  const rows = useMemo(() => people.data?.pages.flatMap((p) => p.items) ?? [], [people.data]);
 
-  const counts = useMemo(
-    () => ({
-      all: rows.length,
-      "no-face": rows.filter((r) => r.u.active && !r.u.face_enrolled).length,
-      "no-beacon": rows.filter((r) => r.u.active && r.beacon === "none").length,
-      inactive: rows.filter((r) => !r.u.active).length,
-    }),
-    [rows],
-  );
+  // Resolve "reports to" names. Managers outside the viewer's scope read as 404 and show a dash.
+  const managerName = usePeopleNames(rows.map((u) => u.manager_id));
 
-  const visible = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return rows.filter(({ u, beacon }) => {
-      if (setup === "no-face" && (!u.active || u.face_enrolled)) return false;
-      if (setup === "no-beacon" && (!u.active || beacon !== "none")) return false;
-      if (setup === "inactive" && u.active) return false;
-      return !term || [u.name, u.email, u.employee_id].some((v) => v.toLowerCase().includes(term));
-    });
-  }, [rows, setup, search]);
-
-  const changeSetup = (s: Setup) => {
-    setSetup(s);
-    setParams(s === "all" ? {} : { setup: s }, { replace: true });
+  const filtered = status !== "all" || !!q || !!department || !!office || scope === "direct";
+  const clearFilters = () => {
+    setStatus("all");
+    setSearch("");
+    setDepartment("");
+    setOffice("");
+    setScope("team");
   };
 
   return (
     <>
       <PageHeader
-        title="People"
-        description={admin ? "Everyone with an account. Add people, change roles and offices, or reset a face scan." : "Your team. You can reset a face scan so someone can enrol again."}
+        title={manage ? "People" : "My team"}
+        description={
+          manage
+            ? "Everyone in your company. Invite people, set roles and reporting lines, and disable accounts when someone leaves."
+            : "People who report to you, directly or through someone on your team."
+        }
         actions={
-          admin && (
-            <Button variant="primary" icon={<UserPlus className="size-4" />} onClick={() => setAdding(true)}>
-              Add person
-            </Button>
+          manage && (
+            <>
+              <Button icon={<Building className="size-4" />} onClick={() => setDepartmentsOpen(true)}>
+                Departments
+              </Button>
+              <Button variant="primary" icon={<UserPlus className="size-4" />} onClick={() => setInviting(true)}>
+                Invite person
+              </Button>
+            </>
           )
         }
       />
 
-      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <ChipGroup
-          label="Filter by setup"
-          value={setup}
-          onChange={changeSetup}
-          options={[
-            { value: "all", label: "Everyone", count: counts.all },
-            { value: "no-face", label: "No face scan", count: counts["no-face"] },
-            { value: "no-beacon", label: "No beacon", count: counts["no-beacon"] },
-            { value: "inactive", label: "Disabled", count: counts.inactive },
-          ]}
-        />
-        <SearchInput value={search} onChange={setSearch} placeholder="Search name, email or ID" className="lg:w-72" />
+      <div className="mb-4 flex flex-col gap-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <ChipGroup
+            label="Filter by status"
+            value={status}
+            onChange={setStatus}
+            options={[
+              { value: "all", label: "Everyone" },
+              { value: "active", label: "Active" },
+              { value: "invited", label: "Invited" },
+              { value: "disabled", label: "Disabled" },
+            ]}
+          />
+          <SearchInput value={search} onChange={setSearch} placeholder="Search name, email or ID" className="lg:w-72" />
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          {!manage && (
+            <ChipGroup
+              label="Team scope"
+              value={scope}
+              onChange={setScope}
+              options={[
+                { value: "team", label: "Whole team" },
+                { value: "direct", label: "Direct reports" },
+              ]}
+            />
+          )}
+          {(departments.data?.length ?? 0) > 0 && (
+            <Select aria-label="Department" value={department} onChange={(e) => setDepartment(e.target.value)} className="sm:w-48">
+              <option value="">All departments</option>
+              {departments.data?.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </Select>
+          )}
+          {(offices.data?.length ?? 0) > 1 && (
+            <Select aria-label="Office" value={office} onChange={(e) => setOffice(e.target.value)} className="sm:w-48">
+              <option value="">All offices</option>
+              {offices.data?.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+            </Select>
+          )}
+        </div>
       </div>
 
       <Card>
@@ -103,140 +139,142 @@ export function People() {
           <TableSkeleton rows={8} />
         ) : people.isError ? (
           <ErrorState error={people.error} onRetry={() => people.refetch()} feature="People" />
-        ) : visible.length === 0 ? (
+        ) : rows.length === 0 ? (
           <EmptyState
             icon={<Users />}
-            title={rows.length ? "No one matches" : "No people yet"}
-            description={rows.length ? "Try clearing the filter or search." : "Add the first person, or ask employees to register in the mobile app."}
+            title={filtered ? "No one matches" : manage ? "Invite your first person" : "Nobody reports to you yet"}
+            description={
+              filtered
+                ? "Try clearing the filters or search."
+                : manage
+                  ? "They get an e-mail to set a password and can then sign in to the mobile app."
+                  : "People appear here once an administrator sets you as their manager."
+            }
             action={
-              rows.length ? (
-                <Button
-                  onClick={() => {
-                    changeSetup("all");
-                    setSearch("");
-                  }}
-                >
-                  Clear filters
-                </Button>
-              ) : admin ? (
-                <Button variant="primary" icon={<UserPlus className="size-4" />} onClick={() => setAdding(true)}>
-                  Add person
+              filtered ? (
+                <Button onClick={clearFilters}>Clear filters</Button>
+              ) : manage ? (
+                <Button variant="primary" icon={<UserPlus className="size-4" />} onClick={() => setInviting(true)}>
+                  Invite person
                 </Button>
               ) : undefined
             }
           />
         ) : (
-          <Table>
-            <thead>
-              <tr>
-                <Th>Person</Th>
-                <Th className="max-sm:hidden">Role</Th>
-                <Th className="max-lg:hidden">Office</Th>
-                <Th>Face</Th>
-                <Th className="max-md:hidden">Beacon</Th>
-                <Th className="max-xl:hidden">Consent</Th>
-                <Th align="right">
-                  <span className="sr-only">Actions</span>
-                </Th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map(({ u, beacon }) => (
-                <tr key={u.employee_id} className="hover:bg-surface-2/50">
-                  <Td>
-                    <div className="flex items-center gap-3">
-                      <Avatar name={u.name} />
-                      <div className="min-w-0">
-                        <p className="flex items-center gap-2 font-medium">
-                          <span className="truncate">{u.name}</span>
-                          {!u.active && <Badge>Disabled</Badge>}
-                        </p>
-                        <p className="max-w-52 truncate text-xs text-muted sm:max-w-none">
-                          {u.employee_id} · {u.email}
-                        </p>
+          <>
+            <Table>
+              <thead>
+                <tr>
+                  <Th>Person</Th>
+                  <Th className="max-sm:hidden">Role</Th>
+                  <Th className="max-lg:hidden">Reports to</Th>
+                  <Th className="max-xl:hidden">Department</Th>
+                  <Th className="whitespace-nowrap max-lg:hidden">Office</Th>
+                  <Th>Status</Th>
+                  <Th className="whitespace-nowrap max-xl:hidden">Last sign-in</Th>
+                  {manage && (
+                    <Th align="right">
+                      <span className="sr-only">Actions</span>
+                    </Th>
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((u) => (
+                  <tr key={u.id} className="hover:bg-surface-2/50">
+                    <Td>
+                      <div className="flex items-center gap-3">
+                        <Avatar name={u.name} />
+                        <div className="min-w-0">
+                          <p className="truncate font-medium">{u.name}</p>
+                          <p className="max-w-52 truncate text-xs text-muted sm:max-w-none">
+                            {u.employee_code} · {u.email}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                  </Td>
-                  <Td className="max-sm:hidden">
-                    <Badge tone={ROLE_TONE[u.role]} className="capitalize">
-                      {u.role}
-                    </Badge>
-                  </Td>
-                  <Td className="text-muted max-lg:hidden">{officeName(offices.data, u.office_id)}</Td>
-                  <Td>
-                    {u.face_enrolled ? (
-                      <Badge tone="success" dot>
-                        Enrolled
+                    </Td>
+                    <Td className="max-sm:hidden">
+                      <Badge tone={ROLE_TONE[u.role_key] ?? "neutral"}>{roleLabel(u.role_key)}</Badge>
+                    </Td>
+                    <Td className="text-muted max-lg:hidden">{u.manager_id ? (managerName.get(u.manager_id) ?? "—") : "—"}</Td>
+                    <Td className="text-muted max-xl:hidden">{departmentName(departments.data, u.department_id)}</Td>
+                    <Td className="whitespace-nowrap text-muted max-lg:hidden">{officeName(offices.data, u.office_id)}</Td>
+                    <Td>
+                      <Badge tone={STATUS_TONE[u.status] ?? "neutral"} dot>
+                        {STATUS_LABEL[u.status] ?? u.status}
                       </Badge>
-                    ) : (
-                      <Badge tone="warn" dot>
-                        Not enrolled
-                      </Badge>
-                    )}
-                  </Td>
-                  <Td className="max-md:hidden">
-                    {beacon === "assigned" ? (
-                      <Badge tone="success" dot>
-                        Own beacon
-                      </Badge>
-                    ) : beacon === "shared" ? (
-                      <Badge tone="info" dot>
-                        Shared only
-                      </Badge>
-                    ) : (
-                      <Badge tone="warn" dot>
-                        None
-                      </Badge>
-                    )}
-                  </Td>
-                  <Td className="max-xl:hidden">
-                    {u.consent_required === undefined ? (
-                      <span className="text-muted">—</span>
-                    ) : u.consent_required ? (
-                      <Badge tone="warn">Pending</Badge>
-                    ) : (
-                      <Badge tone="success">Accepted</Badge>
-                    )}
-                  </Td>
-                  <Td align="right">
-                    <div className="flex justify-end gap-0.5">
-                      {u.face_enrolled && u.employee_id !== me?.employee_id && (
-                        <IconButton label={`Reset face scan for ${u.name}`} onClick={() => setResetting(u)}>
-                          <ScanFace className="size-4" />
-                        </IconButton>
-                      )}
-                      {admin && (
+                    </Td>
+                    <Td className="whitespace-nowrap text-muted max-xl:hidden">{u.last_login_at ? timeAgo(u.last_login_at) : "Never"}</Td>
+                    {manage && (
+                      <Td align="right">
                         <IconButton label={`Edit ${u.name}`} onClick={() => setEditing(u)}>
                           <Pencil className="size-4" />
                         </IconButton>
-                      )}
-                    </div>
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
+                      </Td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+            {people.hasNextPage && (
+              <div className="flex justify-center border-t border-line p-3">
+                <Button loading={people.isFetchingNextPage} onClick={() => people.fetchNextPage()}>
+                  Load more
+                </Button>
+              </div>
+            )}
+          </>
         )}
       </Card>
 
-      {beacons.isError && (
-        <p className="mt-3 flex items-center gap-1.5 text-xs text-muted">
-          <Bluetooth className="size-3.5" /> Beacon status could not be loaded, so the Beacon column may be inaccurate.
-        </p>
+      {inviting && <InviteDialog offices={offices.data ?? []} departments={departments.data ?? []} onClose={() => setInviting(false)} />}
+      {editing && (
+        <EditDialog
+          key={editing.id}
+          user={editing}
+          self={editing.id === me?.id}
+          offices={offices.data ?? []}
+          departments={departments.data ?? []}
+          onClose={() => setEditing(null)}
+        />
       )}
-
-      {adding && <AddDialog offices={offices.data ?? []} onClose={() => setAdding(false)} />}
-      {editing && <EditDialog key={editing.employee_id} user={editing} self={editing.employee_id === me?.employee_id} offices={offices.data ?? []} onClose={() => setEditing(null)} />}
-      {resetting && <ResetFaceDialog user={resetting} onClose={() => setResetting(null)} />}
+      {departmentsOpen && <DepartmentsDialog onClose={() => setDepartmentsOpen(false)} />}
     </>
   );
 }
 
-function OfficeSelect({ offices, id, value, onChange, required }: { offices: Office[]; id: string; value: string; onChange: (v: string) => void; required?: boolean }) {
+function RoleSelect({ id, value, onChange, disabled }: { id: string; value: string; onChange: (v: string) => void; disabled?: boolean }) {
+  const { can } = useAuth();
+  // Only owners may grant (or touch) the owner role; the server enforces the same rule.
+  const options = ROLE_OPTIONS.filter((r) => r.key !== "owner" || can(P.orgManage) || value === "owner");
   return (
-    <Select id={id} value={value} onChange={(e) => onChange(e.target.value)} required={required}>
-      <option value="">{required ? "Select an office…" : "No office"}</option>
-      {offices.map((o) => (
+    <Select id={id} value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
+      {options.map((r) => (
+        <option key={r.key} value={r.key}>
+          {r.label}
+        </option>
+      ))}
+    </Select>
+  );
+}
+
+function OptionSelect({
+  id,
+  value,
+  onChange,
+  items,
+  empty,
+}: {
+  id: string;
+  value: string;
+  onChange: (v: string) => void;
+  items: { id: string; name: string }[];
+  empty: string;
+}) {
+  return (
+    <Select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">{empty}</option>
+      {items.map((o) => (
         <option key={o.id} value={o.id}>
           {o.name}
         </option>
@@ -245,121 +283,184 @@ function OfficeSelect({ offices, id, value, onChange, required }: { offices: Off
   );
 }
 
-function RoleSelect({ id, value, onChange, disabled }: { id: string; value: Role; onChange: (v: Role) => void; disabled?: boolean }) {
+function invalidatePeople(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ["people"] });
+  qc.invalidateQueries({ queryKey: ["dashboard"] });
+}
+
+function ErrorBanner({ children }: { children: string | null }) {
+  if (!children) return null;
   return (
-    <Select id={id} value={value} onChange={(e) => onChange(e.target.value as Role)} disabled={disabled}>
-      <option value="employee">Employee</option>
-      <option value="manager">Manager</option>
-      <option value="admin">Admin</option>
-    </Select>
+    <p role="alert" className="rounded-lg bg-danger-soft px-3 py-2 text-[13px] text-danger">
+      {children}
+    </p>
   );
 }
 
-function AddDialog({ offices, onClose }: { offices: Office[]; onClose: () => void }) {
+function InviteDialog({ offices, departments, onClose }: { offices: Office[]; departments: Department[]; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
-  const [f, setF] = useState({ name: "", email: "", phone: "", password: "", office_id: offices[0]?.id ?? "", role: "employee" as Role });
+  const [f, setF] = useState({ name: "", email: "", employee_code: "", phone: "", role_key: "employee", office_id: offices[0]?.id ?? "", department_id: "" });
+  const [manager, setManager] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((s) => ({ ...s, [k]: v }));
 
   const m = useMutation({
     mutationFn: () =>
-      api<User>("/admin/users", {
+      api<User>("/people", {
         method: "POST",
-        body: { ...f, name: f.name.trim(), email: f.email.trim(), phone: f.phone.trim() || null },
+        body: {
+          name: f.name.trim(),
+          email: f.email.trim(),
+          employee_code: f.employee_code.trim() || undefined,
+          phone: f.phone.trim() || undefined,
+          role_key: f.role_key,
+          office_id: f.office_id || undefined,
+          department_id: f.department_id || undefined,
+          manager_id: manager ?? undefined,
+        },
       }),
     onSuccess: (u) => {
-      toast.success(`Added ${u.name} (${u.employee_id})`);
-      qc.invalidateQueries({ queryKey: ["people"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success(`Invitation sent to ${u.email}`);
+      invalidatePeople(qc);
       onClose();
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => setError(e.message),
   });
 
   return (
     <Dialog
       open
       onClose={onClose}
-      title="Add person"
-      description="They can sign in to the mobile app with their email and this password."
+      title="Invite person"
+      description="They get an e-mail with a link to choose a password. The link works for 7 days."
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" form="add-form" variant="primary" loading={m.isPending}>
-            Add person
+          <Button type="submit" form="invite-form" variant="primary" loading={m.isPending} icon={<Mail className="size-4" />}>
+            Send invitation
           </Button>
         </>
       }
     >
-      {offices.length === 0 ? (
-        <EmptyState title="Create an office first" description="Every person belongs to an office. Add one under Offices, then come back." className="py-6" />
-      ) : (
-        <form
-          id="add-form"
-          className="grid gap-4 sm:grid-cols-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            m.mutate();
-          }}
-        >
-          <Field label="Full name" className="sm:col-span-2">
-            {(p) => <Input {...p} value={f.name} onChange={(e) => set("name", e.target.value)} required autoFocus />}
-          </Field>
-          <Field label="Email">
-            {(p) => <Input {...p} type="email" value={f.email} onChange={(e) => set("email", e.target.value)} required />}
-          </Field>
-          <Field label="Phone (optional)">
-            {(p) => <Input {...p} type="tel" value={f.phone} onChange={(e) => set("phone", e.target.value)} />}
-          </Field>
-          <Field label="Office">
-            {(p) => <OfficeSelect offices={offices} id={p.id} value={f.office_id} onChange={(v) => set("office_id", v)} required />}
-          </Field>
-          <Field label="Role">{(p) => <RoleSelect id={p.id} value={f.role} onChange={(v) => set("role", v)} />}</Field>
-          <Field label="Temporary password" hint="At least 8 characters." className="sm:col-span-2">
-            {(p) => <Input {...p} type="text" autoComplete="off" minLength={8} maxLength={128} value={f.password} onChange={(e) => set("password", e.target.value)} required />}
-          </Field>
-        </form>
-      )}
+      <form
+        id="invite-form"
+        className="grid gap-4 sm:grid-cols-2"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          setError(null);
+          m.mutate();
+        }}
+      >
+        {error && (
+          <div className="sm:col-span-2">
+            <ErrorBanner>{error}</ErrorBanner>
+          </div>
+        )}
+        <Field label="Full name" className="sm:col-span-2">
+          {(p) => <Input {...p} value={f.name} onChange={(e) => set("name", e.target.value)} required maxLength={120} autoFocus />}
+        </Field>
+        <Field label="Work email">
+          {(p) => <Input {...p} type="email" value={f.email} onChange={(e) => set("email", e.target.value)} required />}
+        </Field>
+        <Field label="Employee ID (optional)" hint="Left blank, one is generated.">
+          {(p) => <Input {...p} value={f.employee_code} onChange={(e) => set("employee_code", e.target.value)} maxLength={40} />}
+        </Field>
+        <Field label="Role" hint={ROLE_OPTIONS.find((r) => r.key === f.role_key)?.hint}>
+          {(p) => <RoleSelect id={p.id} value={f.role_key} onChange={(v) => set("role_key", v)} />}
+        </Field>
+        <Field label="Phone (optional)">
+          {(p) => <Input {...p} type="tel" value={f.phone} onChange={(e) => set("phone", e.target.value)} maxLength={40} />}
+        </Field>
+        <Field label="Office">
+          {(p) => <OptionSelect id={p.id} value={f.office_id} onChange={(v) => set("office_id", v)} items={offices} empty="No office yet" />}
+        </Field>
+        <Field label="Department">
+          {(p) => <OptionSelect id={p.id} value={f.department_id} onChange={(v) => set("department_id", v)} items={departments} empty="No department" />}
+        </Field>
+        <Field label="Reports to" className="sm:col-span-2">
+          {(p) => <PersonPicker id={p.id} value={manager} onChange={setManager} emptyLabel="No manager" />}
+        </Field>
+      </form>
     </Dialog>
   );
 }
 
-function EditDialog({ user, self, offices, onClose }: { user: User; self: boolean; offices: Office[]; onClose: () => void }) {
+function EditDialog({
+  user,
+  self,
+  offices,
+  departments,
+  onClose,
+}: {
+  user: User;
+  self: boolean;
+  offices: Office[];
+  departments: Department[];
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
   const toast = useToast();
-  const [name, setName] = useState(user.name);
-  const [role, setRole] = useState<Role>(user.role);
-  const [office, setOffice] = useState(user.office_id ?? "");
-  const [active, setActive] = useState(user.active);
+  const { can } = useAuth();
+  const [f, setF] = useState({
+    name: user.name,
+    email: user.email,
+    employee_code: user.employee_code,
+    phone: user.phone ?? "",
+    role_key: user.role_key,
+    office_id: user.office_id ?? "",
+    department_id: user.department_id ?? "",
+  });
+  const [manager, setManager] = useState<string | null>(user.manager_id);
+  const [error, setError] = useState<string | null>(null);
+  const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((s) => ({ ...s, [k]: v }));
+  const ownerLocked = user.role_key === "owner" && !can(P.orgManage);
 
-  const m = useMutation({
+  const save = useMutation({
     mutationFn: () => {
       const body: Record<string, unknown> = {};
-      if (name.trim() !== user.name) body.name = name.trim();
-      if (role !== user.role) body.role = role;
-      if (office && office !== user.office_id) body.office_id = office;
-      if (active !== user.active) body.active = active;
-      return api<User>(`/admin/users/${user.employee_id}`, { method: "PATCH", body });
+      if (f.name.trim() !== user.name) body.name = f.name.trim();
+      if (f.email.trim() !== user.email) body.email = f.email.trim();
+      if (f.employee_code.trim() !== user.employee_code) body.employee_code = f.employee_code.trim();
+      if ((f.phone.trim() || null) !== user.phone) body.phone = f.phone.trim() || null;
+      if (f.role_key !== user.role_key) body.role_key = f.role_key;
+      if ((f.office_id || null) !== user.office_id) body.office_id = f.office_id || null;
+      if ((f.department_id || null) !== user.department_id) body.department_id = f.department_id || null;
+      if (manager !== user.manager_id) body.manager_id = manager;
+      return api<User>(`/people/${user.id}`, { method: "PATCH", body });
     },
-    onSuccess: () => {
-      toast.success(`Saved ${name.trim()}`);
-      qc.invalidateQueries({ queryKey: ["people"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    onSuccess: (u) => {
+      toast.success(`Saved ${u.name}`);
+      invalidatePeople(qc);
       onClose();
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => setError(e.message),
   });
+
+  const action = useMutation({
+    mutationFn: ({ path, msg }: { path: string; msg: string }) => api(`/people/${user.id}/${path}`, { method: "POST" }).then(() => msg),
+    onSuccess: (msg) => {
+      toast.success(msg);
+      invalidatePeople(qc);
+      onClose();
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+  const run = (path: string, msg: string) => {
+    setError(null);
+    action.mutate({ path, msg });
+  };
 
   return (
     <Dialog
       open
       onClose={onClose}
       title={`Edit ${user.name}`}
-      description={`${user.employee_id} · ${user.email}`}
+      description={`${user.employee_code} · ${STATUS_LABEL[user.status] ?? user.status}`}
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" form="edit-form" variant="primary" loading={m.isPending}>
+          <Button type="submit" form="edit-form" variant="primary" loading={save.isPending}>
             Save changes
           </Button>
         </>
@@ -367,63 +468,164 @@ function EditDialog({ user, self, offices, onClose }: { user: User; self: boolea
     >
       <form
         id="edit-form"
-        className="space-y-4"
-        onSubmit={(e) => {
+        className="grid gap-4 sm:grid-cols-2"
+        onSubmit={(e: FormEvent) => {
           e.preventDefault();
-          m.mutate();
+          setError(null);
+          save.mutate();
         }}
       >
-        <Field label="Full name">{(p) => <Input {...p} value={name} onChange={(e) => setName(e.target.value)} required />}</Field>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Role" hint={self ? "You cannot change your own role." : undefined}>
-            {(p) => <RoleSelect id={p.id} value={role} onChange={setRole} disabled={self} />}
-          </Field>
-          <Field label="Office" hint="Moving office also moves their team.">
-            {(p) => <OfficeSelect offices={offices} id={p.id} value={office} onChange={setOffice} />}
-          </Field>
-        </div>
-        {self ? (
-          <p className="text-xs text-muted">You cannot disable your own account.</p>
-        ) : (
-          <Switch checked={active} onChange={setActive} label="Account active" hint="Disabled people cannot sign in or check in." />
+        {error && (
+          <div className="sm:col-span-2">
+            <ErrorBanner>{error}</ErrorBanner>
+          </div>
         )}
+        <Field label="Full name">{(p) => <Input {...p} value={f.name} onChange={(e) => set("name", e.target.value)} required maxLength={120} />}</Field>
+        <Field label="Employee ID">
+          {(p) => <Input {...p} value={f.employee_code} onChange={(e) => set("employee_code", e.target.value)} required maxLength={40} />}
+        </Field>
+        <Field label="Email" hint={user.status === "invited" ? "Fixing a typo? Save, then resend the invitation." : undefined}>
+          {(p) => <Input {...p} type="email" value={f.email} onChange={(e) => set("email", e.target.value)} required />}
+        </Field>
+        <Field label="Phone">
+          {(p) => <Input {...p} type="tel" value={f.phone} onChange={(e) => set("phone", e.target.value)} maxLength={40} />}
+        </Field>
+        <Field
+          label="Role"
+          hint={self ? "You cannot change your own role." : ownerLocked ? "Only an owner can change an owner." : ROLE_OPTIONS.find((r) => r.key === f.role_key)?.hint}
+        >
+          {(p) => <RoleSelect id={p.id} value={f.role_key} onChange={(v) => set("role_key", v)} disabled={self || ownerLocked} />}
+        </Field>
+        <Field label="Reports to">
+          {(p) => <PersonPicker id={p.id} value={manager} onChange={setManager} excludeId={user.id} emptyLabel="No manager" />}
+        </Field>
+        <Field label="Office">
+          {(p) => <OptionSelect id={p.id} value={f.office_id} onChange={(v) => set("office_id", v)} items={offices} empty="No office" />}
+        </Field>
+        <Field label="Department">
+          {(p) => <OptionSelect id={p.id} value={f.department_id} onChange={(v) => set("department_id", v)} items={departments} empty="No department" />}
+        </Field>
       </form>
+
+      {!self && !ownerLocked && (
+        <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-line pt-4">
+          {user.status === "invited" && (
+            <Button size="sm" loading={action.isPending} icon={<Mail className="size-4" />} onClick={() => run("invite", "Invitation sent again")}>
+              Resend invitation
+            </Button>
+          )}
+          {user.status !== "disabled" && (
+            <Button size="sm" loading={action.isPending} onClick={() => run("revoke-sessions", "Signed out of every device")}>
+              Sign out everywhere
+            </Button>
+          )}
+          {user.status === "disabled" ? (
+            <Button size="sm" variant="secondary" loading={action.isPending} onClick={() => run("enable", `${user.name} can sign in again`)}>
+              Enable account
+            </Button>
+          ) : (
+            <Button size="sm" variant="danger" loading={action.isPending} onClick={() => run("disable", `${user.name} was disabled`)}>
+              Disable account
+            </Button>
+          )}
+          <p className="basis-full text-xs text-muted text-pretty">
+            Disabling signs them out everywhere and cancels pending links. Their records stay. Active and invited people count against your plan&apos;s seat limit.
+          </p>
+        </div>
+      )}
     </Dialog>
   );
 }
 
-function ResetFaceDialog({ user, onClose }: { user: User; onClose: () => void }) {
+function DepartmentsDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
-  const m = useMutation({
-    mutationFn: () => api(`/manager/team/${user.employee_id}/face`, { method: "DELETE" }),
+  const deps = useDepartments();
+  const [name, setName] = useState("");
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
+
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["departments"] });
+    qc.invalidateQueries({ queryKey: ["people"] });
+  };
+  const create = useMutation({
+    mutationFn: () => api<Department>("/departments", { method: "POST", body: { name: name.trim() } }),
     onSuccess: () => {
-      toast.success(`${user.name} can enrol their face again`);
-      qc.invalidateQueries({ queryKey: ["people"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
-      onClose();
+      setName("");
+      refresh();
     },
     onError: (e: Error) => toast.error(e.message),
   });
+  const rename = useMutation({
+    mutationFn: (d: { id: string; name: string }) => api<Department>(`/departments/${d.id}`, { method: "PATCH", body: { name: d.name.trim() } }),
+    onSuccess: () => {
+      setRenaming(null);
+      refresh();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => api(`/departments/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success("Department deleted. Its members now have no department.");
+      refresh();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   return (
-    <Dialog
-      open
-      onClose={onClose}
-      size="sm"
-      title="Reset face scan?"
-      footer={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="danger" loading={m.isPending} onClick={() => m.mutate()}>
-            Reset face scan
-          </Button>
-        </>
-      }
-    >
-      <p className="text-sm text-muted text-pretty">
-        This removes {user.name}&apos;s saved face data. They will not be able to check in until they enrol again in the
-        mobile app. Only do this when you have confirmed it is really them.
-      </p>
+    <Dialog open onClose={onClose} title="Departments" description="Group people for filtering and reports." footer={<Button onClick={onClose}>Done</Button>}>
+      <form
+        className="mb-4 flex gap-2"
+        onSubmit={(e: FormEvent) => {
+          e.preventDefault();
+          if (name.trim()) create.mutate();
+        }}
+      >
+        <Input aria-label="New department name" value={name} onChange={(e) => setName(e.target.value)} placeholder="New department, e.g. Engineering" maxLength={120} />
+        <Button type="submit" variant="primary" loading={create.isPending} disabled={!name.trim()}>
+          Add
+        </Button>
+      </form>
+      {deps.isLoading ? (
+        <p className="text-sm text-muted">Loading…</p>
+      ) : deps.data?.length === 0 ? (
+        <p className="rounded-lg bg-surface-2 px-3 py-4 text-center text-sm text-muted">No departments yet.</p>
+      ) : (
+        <ul className="divide-y divide-line rounded-lg border border-line">
+          {deps.data?.map((d) => (
+            <li key={d.id} className="flex items-center gap-2 px-3 py-2">
+              {renaming?.id === d.id ? (
+                <form
+                  className="flex flex-1 gap-2"
+                  onSubmit={(e: FormEvent) => {
+                    e.preventDefault();
+                    if (renaming.name.trim()) rename.mutate(renaming);
+                  }}
+                >
+                  <Input aria-label={`Rename ${d.name}`} value={renaming.name} onChange={(e) => setRenaming({ id: d.id, name: e.target.value })} autoFocus maxLength={120} />
+                  <Button size="sm" type="submit" variant="primary" loading={rename.isPending}>
+                    Save
+                  </Button>
+                  <Button size="sm" onClick={() => setRenaming(null)}>
+                    Cancel
+                  </Button>
+                </form>
+              ) : (
+                <>
+                  <span className="min-w-0 flex-1 truncate text-sm">{d.name}</span>
+                  <IconButton label={`Rename ${d.name}`} onClick={() => setRenaming({ id: d.id, name: d.name })}>
+                    <Pencil className="size-4" />
+                  </IconButton>
+                  <IconButton label={`Delete ${d.name}`} onClick={() => remove.mutate(d.id)}>
+                    <Trash2 className="size-4" />
+                  </IconButton>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
     </Dialog>
   );
 }

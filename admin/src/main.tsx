@@ -4,7 +4,7 @@ import { BrowserRouter } from "react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "./index.css";
 import { App } from "./App";
-import { ApiError } from "./lib/api";
+import { ApiError } from "./api/client";
 import { ThemeProvider } from "./lib/theme";
 import { ToastProvider } from "./lib/toast";
 import { AuthProvider } from "./lib/auth";

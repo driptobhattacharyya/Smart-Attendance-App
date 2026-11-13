@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { CalendarDays, ChevronLeft, ChevronRight, Download } from "lucide-react";
-import { api, download } from "../lib/api";
-import type { AttendanceReport, DaySummary, Session } from "../lib/types";
+import { exportTimesheets, useTimesheets } from "../api/attendance";
+import type { AttendanceReport, AttendanceSession, DaySummary } from "../api/attendance";
 import {
   addDays,
   dateRange,
@@ -45,14 +45,10 @@ export function Timesheets() {
   const tooLong = days.length > MAX_DAYS;
   const valid = days.length > 0 && !tooLong;
 
-  const q = useQuery({
-    queryKey: ["attendance", start, end],
-    queryFn: () => api<AttendanceReport[]>(`/manager/attendance?start=${start}&end=${end}`),
-    enabled: valid,
-  });
+  const q = useTimesheets(start, end, valid);
 
   const exportCsv = useMutation({
-    mutationFn: () => download(`/manager/attendance/export.csv?start=${start}&end=${end}`, `attendance_${start}_${end}.csv`),
+    mutationFn: () => exportTimesheets(start, end),
     onSuccess: () => toast.success("CSV downloaded"),
     onError: (e: Error) => toast.error(e.message),
   });
@@ -71,7 +67,7 @@ export function Timesheets() {
   const reports = useMemo(() => {
     const term = search.trim().toLowerCase();
     return (q.data ?? []).filter(
-      (r) => !term || r.name.toLowerCase().includes(term) || r.employee_id.toLowerCase().includes(term),
+      (r) => !term || r.name.toLowerCase().includes(term) || r.employee_code.toLowerCase().includes(term),
     );
   }, [q.data, search]);
 
@@ -180,7 +176,7 @@ export function Timesheets() {
                 {reports.map((r) => {
                   const byDate = new Map(r.days.map((d) => [d.date, d]));
                   return (
-                    <tr key={r.employee_id} className="group">
+                    <tr key={r.user_id} className="group">
                       <th
                         scope="row"
                         className="sticky left-0 z-10 border-b border-line bg-surface px-4 py-2 text-left font-normal group-hover:bg-surface-2"
@@ -189,7 +185,7 @@ export function Timesheets() {
                           <Avatar name={r.name} size={28} />
                           <div className="min-w-0">
                             <p className="max-w-36 truncate font-medium">{r.name}</p>
-                            <p className="text-xs text-muted">{r.employee_id}</p>
+                            <p className="text-xs text-muted">{r.employee_code}</p>
                           </div>
                         </div>
                       </th>
@@ -288,7 +284,7 @@ function DayPanel({
         <div>
           <h3 className="mb-2 text-xs font-medium tracking-wide text-muted uppercase">Sessions</h3>
           <ul className="space-y-2">
-            {day.sessions.map((s: Session) => {
+            {day.sessions.map((s: AttendanceSession) => {
               const active = s.id === sessionId;
               return (
                 <li key={s.id}>

@@ -1,7 +1,6 @@
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../lib/api";
-import type { SessionDetail, SessionState } from "../lib/types";
+import { useSessionDetail } from "../api/attendance";
+import type { SessionDetail, SessionState } from "../api/attendance";
 import { fmtTime, formatMinutes, SESSION_STATE_LABEL, signalLevel } from "../lib/format";
 import { Badge, ErrorState, SignalBars, Skeleton } from "../ui/misc";
 import type { Tone } from "../ui/misc";
@@ -58,10 +57,7 @@ function hourTicks(start: number, end: number): number[] {
 }
 
 export function SessionTimeline({ sessionId }: { sessionId: string }) {
-  const q = useQuery({
-    queryKey: ["session", sessionId],
-    queryFn: () => api<SessionDetail>(`/manager/sessions/${sessionId}`),
-  });
+  const q = useSessionDetail(sessionId);
 
   const built = useMemo(() => (q.data ? buildSegments(q.data) : null), [q.data]);
 

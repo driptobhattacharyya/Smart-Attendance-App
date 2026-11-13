@@ -2,9 +2,9 @@ import type { ReactNode } from "react";
 import { AlertTriangle, PlugZap, RefreshCw } from "lucide-react";
 import { cx } from "./cx";
 import { Button } from "./Button";
-import { ApiError } from "../lib/api";
+import { ApiError } from "../api/client";
 import { initials, STATUS_HELP, STATUS_LABEL } from "../lib/format";
-import type { PresenceStatus } from "../lib/types";
+import type { PresenceStatus } from "../api/attendance";
 
 /* ---------- Badge ---------- */
 
@@ -77,7 +77,7 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-6 flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1 basis-72">
         <h1 className="text-xl font-semibold tracking-tight text-balance">{title}</h1>
         {description && <p className="mt-1 max-w-2xl text-sm text-muted text-pretty">{description}</p>}
       </div>

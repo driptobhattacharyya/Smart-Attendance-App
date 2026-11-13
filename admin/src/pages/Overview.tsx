@@ -1,5 +1,4 @@
 import { Link } from "react-router";
-import { useQuery } from "@tanstack/react-query";
 import {
   Area,
   AreaChart,
@@ -20,9 +19,11 @@ import {
   ScanFace,
   TriangleAlert,
 } from "lucide-react";
-import { api } from "../lib/api";
+import { useDashboard } from "../api/attendance";
+import type { PresenceStatus } from "../api/attendance";
+import { P } from "../api/types";
 import { useAuth } from "../lib/auth";
-import type { Dashboard, PresenceStatus } from "../lib/types";
+import { Onboarding } from "./Onboarding";
 import { fmtDay, fmtTime, formatMinutes, STATUS_HELP, STATUS_LABEL } from "../lib/format";
 import { Avatar, Card, CardHeader, EmptyState, ErrorState, PageHeader, Skeleton, STATUS_TONE } from "../ui/misc";
 import type { Tone } from "../ui/misc";
@@ -112,12 +113,10 @@ function Callout({
 }
 
 export function Overview() {
-  const { user } = useAuth();
-  const q = useQuery({
-    queryKey: ["dashboard"],
-    queryFn: () => api<Dashboard>("/manager/dashboard"),
-    refetchInterval: 60_000,
-  });
+  const { can, canAny } = useAuth();
+  const placesAdmin = can(P.placesManage);
+  const showAttendance = canAny(P.viewTeam, P.viewOrg);
+  const q = useDashboard(showAttendance);
   const d = q.data;
 
   const chart = d?.daily.map((x) => ({
@@ -139,43 +138,43 @@ export function Overview() {
             hint="Corrections and leave from your team"
           />
         ),
-        d.employees_without_face > 0 && (
+        !!d.employees_without_face && (
           <Callout
             key="face"
-            to="/people?setup=no-face"
+            to="/people"
             icon={<ScanFace />}
             count={d.employees_without_face}
             title={d.employees_without_face === 1 ? "person without a face scan" : "people without a face scan"}
             hint="They cannot check in until they enrol in the app"
           />
         ),
-        d.employees_without_beacon > 0 && (
+        !!d.employees_without_beacon && (
           <Callout
             key="bt"
-            to="/people?setup=no-beacon"
+            to="/desk-devices"
             icon={<Bluetooth />}
             count={d.employees_without_beacon}
-            title={d.employees_without_beacon === 1 ? "person without a beacon" : "people without a beacon"}
-            hint="Assign each a desk beacon, or add a shared one for the office"
+            title={d.employees_without_beacon === 1 ? "person without a desk device" : "people without a desk device"}
+            hint="Assign each a desk device, or add a shared one for the office"
           />
         ),
-        !!d.unpaired_desk_apps && user?.role === "admin" && (
+        !!d.unpaired_desk_apps && placesAdmin && (
           <Callout
             key="dk"
-            to="/beacons?filter=unpaired"
+            to="/desk-devices?filter=unpaired"
             icon={<Monitor />}
             count={d.unpaired_desk_apps}
             title={d.unpaired_desk_apps === 1 ? "office computer not paired" : "office computers not paired"}
             hint="Pair them with Attendify Desk so their desks count as present"
           />
         ),
-        !!d.unassigned_beacons && user?.role === "admin" && (
+        !!d.unassigned_beacons && placesAdmin && (
           <Callout
             key="ub"
-            to="/beacons?filter=unassigned"
+            to="/desk-devices?filter=unassigned"
             icon={<TriangleAlert />}
             count={d.unassigned_beacons}
-            title={d.unassigned_beacons === 1 ? "beacon with no owner" : "beacons with no owner"}
+            title={d.unassigned_beacons === 1 ? "desk device with no owner" : "desk devices with no owner"}
             hint="Assign them to a person or keep as shared zone tags"
           />
         ),
@@ -193,9 +192,11 @@ export function Overview() {
         }
       />
 
-      {q.isError ? (
+      <Onboarding />
+
+      {!showAttendance ? null : q.isError ? (
         <Card>
-          <ErrorState error={q.error} onRetry={() => q.refetch()} feature="The overview" />
+          <ErrorState error={q.error} onRetry={() => q.refetch()} feature="The attendance overview" />
         </Card>
       ) : (
         <div className="space-y-6">
@@ -306,7 +307,7 @@ export function Overview() {
                   ) : (
                     <ul className="divide-y divide-line">
                       {d.late_today.map((p) => (
-                        <li key={p.employee_id} className="flex items-center gap-3 py-2">
+                        <li key={p.user_id} className="flex items-center gap-3 py-2">
                           <Avatar name={p.name} size={28} />
                           <span className="min-w-0 flex-1 truncate text-sm font-medium">{p.name}</span>
                           <span className="text-sm text-warn tabular-nums">{fmtTime(p.first_check_in)}</span>
