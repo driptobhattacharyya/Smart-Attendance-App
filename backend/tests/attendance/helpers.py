@@ -126,7 +126,7 @@ class Clock:
 
     def __init__(self, monkeypatch):
         self.offset = timedelta(0)
-        from app.attendance import face_api, service
+        from app.attendance import face_api, reports, service
         from app.jobs import service as jobs
 
         real = datetime.now
@@ -134,7 +134,7 @@ class Clock:
         def now():
             return real(UTC) + self.offset
 
-        for module in (service, face_api, jobs):
+        for module in (service, face_api, jobs, reports):
             monkeypatch.setattr(module, "utcnow", now)
 
     def advance(self, **kw):

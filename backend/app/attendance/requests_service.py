@@ -194,7 +194,12 @@ async def decide(ctx: Ctx, request_id: uuid.UUID, data: DecisionIn) -> RequestOu
     await lock_user(ctx.db, ctx.org_id, row.user_id)
     # Re-read under the lock: of two simultaneous decisions exactly one sees "pending".
     row = (
-        await ctx.db.execute(select(Request).where(Request.id == request_id).with_for_update())
+        await ctx.db.execute(
+            select(Request)
+            .where(Request.id == request_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one()
     if row.status != "pending":
         raise conflict("request_not_pending", f"Request is already {row.status}")
@@ -247,7 +252,12 @@ async def cancel(ctx: Ctx, request_id: uuid.UUID) -> RequestOut:
         raise not_found("Request")
     await lock_user(ctx.db, ctx.org_id, ctx.user_id)
     row = (
-        await ctx.db.execute(select(Request).where(Request.id == request_id).with_for_update())
+        await ctx.db.execute(
+            select(Request)
+            .where(Request.id == request_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one()
     user = await get_user(ctx.db, ctx.user_id)
     office, tz = await _office_tz(ctx, user)
