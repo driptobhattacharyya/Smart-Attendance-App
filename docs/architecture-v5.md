@@ -290,3 +290,29 @@ assert ids(0) == (40716, 55737) and ids(1) == (50226, 57433) and ids(5_000_000) 
 - Sessions: `auth_sessions.family_id` is the public session id and the `sid` claim; refresh rotation
   adds a row to the family and sets `replaced_by` on the old one.
 - Migrations that add a tenant table call `app.core.rls.tenant_table_statements(table)`.
+
+## Appendix C. Deviations and details of the attendance implementation (step 2)
+
+- Events carry a `day` column (office-local date of the session's check-in, fixed at append time).
+  Every event of a session, including ones after midnight, shares it; `attendance_days` is rebuilt
+  per (user, day) from the events with that `day`. A start event's `session_id` is its own id.
+- Concurrency: every attendance write first takes `pg_advisory_xact_lock(hashtext(org:user))`
+  (`attendance/store.py`). A row lock cannot protect "no open session yet", and `FOR UPDATE` on
+  `users` would conflict with foreign-key inserts; the advisory lock is transaction scoped, so it is
+  safe behind a pooler and never leaks.
+- Counting `presence` and `span_minus_away` agree numerically with the current event vocabulary;
+  `span` differs. Heartbeats after the grace window do not resurrect a session: it is closed at the
+  last evidence (`auto_check_out`, reason `stale`) and the phone checks in again. Sessions longer
+  than `max_session_hours` close with reason `max_session`.
+- A face scan is a `face_verified` event; a check-in "consumes" it by recording its id in the
+  start event payload (`face_event_id`), so the log stays append-only.
+- Failed face verifications and security rejections (mock location, rooted, integrity) must
+  survive the request: face failures are returned (403) rather than raised so the transaction
+  commits, and rejections are audited through a separate short transaction.
+- The retention job strips `location.lat/lon` from event payloads and sets `coords_stripped`; the
+  trigger allows only a payload-only update by `attendify_system` with `app.retention_job = on`.
+- Play Integrity nonces are HMAC-signed `id|iat|mac` values bound to the user; single use is
+  recorded in `face_challenges_used` (`nonce:` prefix).
+- Policy rules gained `location_max_accuracy_m`, `location_max_age_seconds`, `min_rssi`,
+  `work_start`, `work_end`, `weekly_off`, `holidays`, `wfh_weekdays`. Desk activity monitoring
+  needs both the policy rule and the org setting `desk_activity_monitoring`.

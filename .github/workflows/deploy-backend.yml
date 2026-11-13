@@ -58,16 +58,32 @@ jobs:
         working-directory: infra/aws
         run: sam build
 
+      # Migrations run before the new code goes live, as the table OWNER over a direct
+      # (non-pooled) connection. They are additive and idempotent per revision.
+      - name: Run database migrations
+        working-directory: backend
+        env:
+          ALEMBIC_DATABASE_URL: ${{ secrets.DATABASE_MIGRATION_URL }}
+          ATTENDIFY_APP_PASSWORD: ${{ secrets.ATTENDIFY_APP_PASSWORD }}
+          ATTENDIFY_SYSTEM_PASSWORD: ${{ secrets.ATTENDIFY_SYSTEM_PASSWORD }}
+        run: uv run alembic upgrade head
+
       - name: Deploy stack
         working-directory: infra/aws
         env:
-          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_SYSTEM_URL: ${{ secrets.DATABASE_SYSTEM_URL }}
+          DATA_KEY: ${{ secrets.DATA_KEY }}
+          INTERNAL_JOB_SECRET: ${{ secrets.INTERNAL_JOB_SECRET }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           ORIGIN_SECRET: ${{ secrets.ORIGIN_SECRET }}
         run: |
           sam deploy --no-confirm-changeset --no-fail-on-empty-changeset \
             --parameter-overrides \
-              "MongoUri=${MONGODB_URI}" \
+              "DatabaseUrl=${DATABASE_URL}" \
+              "DatabaseSystemUrl=${DATABASE_SYSTEM_URL}" \
+              "DataKey=${DATA_KEY}" \
+              "InternalJobSecret=${INTERNAL_JOB_SECRET}" \
               "JwtSecret=${JWT_SECRET}" \
               "OriginSecret=${ORIGIN_SECRET}"
 
@@ -77,4 +93,4 @@ jobs:
             --query "Stacks[0].Outputs[?OutputKey=='FunctionUrl'].OutputValue" --output text)
           echo "Function URL: ${url}"
           curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors \
-            --max-time 40 "${url%/}/api/health"
+            --max-time 40 "${url%/}/api/v1/health"

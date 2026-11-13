@@ -12,6 +12,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 HEADER = b"x-origin-auth"
 EXEMPT_PATHS = {"/api/v1/health"}
+# EventBridge cannot send X-Origin-Auth; these routes check INTERNAL_JOB_SECRET themselves.
+EXEMPT_PREFIXES = ("/api/v1/internal/jobs/",)
 
 
 class OriginAuthMiddleware:
@@ -20,7 +22,10 @@ class OriginAuthMiddleware:
         self._secret = secret.encode()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] not in ("http", "websocket") or scope.get("path") in EXEMPT_PATHS:
+        if scope["type"] not in ("http", "websocket") or (
+            scope.get("path") in EXEMPT_PATHS
+            or str(scope.get("path", "")).startswith(EXEMPT_PREFIXES)
+        ):
             await self.app(scope, receive, send)
             return
         supplied = next((v for k, v in scope["headers"] if k == HEADER), b"")

@@ -82,6 +82,90 @@ Resources:
       DockerContext: ../../backend
       DockerTag: latest
 
+  # ---- scheduled jobs ----------------------------------------------------------------------
+  # EventBridge calls the internal job endpoints through the Function URL with the shared secret
+  # (header X-Internal-Job-Secret, held by the Connection in Secrets Manager). Those paths are
+  # exempt from the X-Origin-Auth check (backend/app/origin_auth.py) because the secret protects
+  # them.
+  JobsConnection:
+    Type: AWS::Events::Connection
+    Properties:
+      Name: !Sub "${AWS::StackName}-jobs"
+      AuthorizationType: API_KEY
+      AuthParameters:
+        ApiKeyAuthParameters:
+          ApiKeyName: X-Internal-Job-Secret
+          ApiKeyValue: !Ref InternalJobSecret
+
+  CloseStaleDestination:
+    Type: AWS::Events::ApiDestination
+    Properties:
+      Name: !Sub "${AWS::StackName}-close-stale-sessions"
+      ConnectionArn: !GetAtt JobsConnection.Arn
+      HttpMethod: POST
+      InvocationEndpoint: !Sub "${ApiFunctionUrl.FunctionUrl}api/v1/internal/jobs/close-stale-sessions"
+      InvocationRateLimitPerSecond: 1
+
+  RetentionDestination:
+    Type: AWS::Events::ApiDestination
+    Properties:
+      Name: !Sub "${AWS::StackName}-retention"
+      ConnectionArn: !GetAtt JobsConnection.Arn
+      HttpMethod: POST
+      InvocationEndpoint: !Sub "${ApiFunctionUrl.FunctionUrl}api/v1/internal/jobs/retention"
+      InvocationRateLimitPerSecond: 1
+
+  JobsInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-job-destinations
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: events:InvokeApiDestination
+                Resource:
+                  - !GetAtt CloseStaleDestination.Arn
+                  - !GetAtt RetentionDestination.Arn
+
+  CloseStaleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-close-stale-sessions"
+      Description: Auto check-out sessions whose phone stopped reporting (every 5 minutes)
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Id: close-stale-sessions
+          Arn: !GetAtt CloseStaleDestination.Arn
+          RoleArn: !GetAtt JobsInvokeRole.Arn
+          Input: "{}"
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+
+  RetentionRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-retention"
+      Description: Delete presence samples and strip coordinates past the retention window (daily)
+      ScheduleExpression: cron(30 21 * * ? *)
+      State: ENABLED
+      Targets:
+        - Id: retention
+          Arn: !GetAtt RetentionDestination.Arn
+          RoleArn: !GetAtt JobsInvokeRole.Arn
+          Input: "{}"
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+
 Outputs:
   FunctionUrl:
     Description: Set this as API_ORIGIN in Cloudflare Pages (no trailing slash needed)
