@@ -14,7 +14,6 @@ import {
   Radio,
   Settings as SettingsIcon,
   Sun,
-  UserRound,
   Users,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
@@ -128,7 +127,6 @@ function UserCard({ onNavigate }: { onNavigate?: () => void }) {
           <span className="block truncate text-[13px] font-medium">{me.name}</span>
           <span className="block truncate text-xs text-muted">{me.org.name}</span>
         </span>
-        <UserRound className="size-4 shrink-0 text-subtle" aria-hidden />
       </NavLink>
       <ThemeToggle />
       <IconButton label="Sign out" onClick={() => void logout()}>

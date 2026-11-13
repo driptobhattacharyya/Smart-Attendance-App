@@ -196,7 +196,7 @@ export function Overview() {
 
       {!showAttendance ? null : q.isError ? (
         <Card>
-          <ErrorState error={q.error} onRetry={() => q.refetch()} feature="Attendance numbers" />
+          <ErrorState error={q.error} onRetry={() => q.refetch()} feature="The attendance overview" />
         </Card>
       ) : (
         <div className="space-y-6">

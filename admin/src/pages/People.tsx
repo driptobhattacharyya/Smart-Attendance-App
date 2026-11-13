@@ -169,9 +169,9 @@ export function People() {
                   <Th className="max-sm:hidden">Role</Th>
                   <Th className="max-lg:hidden">Reports to</Th>
                   <Th className="max-xl:hidden">Department</Th>
-                  <Th className="max-lg:hidden">Office</Th>
+                  <Th className="whitespace-nowrap max-lg:hidden">Office</Th>
                   <Th>Status</Th>
-                  <Th className="max-xl:hidden">Last sign-in</Th>
+                  <Th className="whitespace-nowrap max-xl:hidden">Last sign-in</Th>
                   {manage && (
                     <Th align="right">
                       <span className="sr-only">Actions</span>
@@ -198,13 +198,13 @@ export function People() {
                     </Td>
                     <Td className="text-muted max-lg:hidden">{u.manager_id ? (managerName.get(u.manager_id) ?? "—") : "—"}</Td>
                     <Td className="text-muted max-xl:hidden">{departmentName(departments.data, u.department_id)}</Td>
-                    <Td className="text-muted max-lg:hidden">{officeName(offices.data, u.office_id)}</Td>
+                    <Td className="whitespace-nowrap text-muted max-lg:hidden">{officeName(offices.data, u.office_id)}</Td>
                     <Td>
                       <Badge tone={STATUS_TONE[u.status] ?? "neutral"} dot>
                         {STATUS_LABEL[u.status] ?? u.status}
                       </Badge>
                     </Td>
-                    <Td className="text-muted max-xl:hidden">{u.last_login_at ? timeAgo(u.last_login_at) : "Never"}</Td>
+                    <Td className="whitespace-nowrap text-muted max-xl:hidden">{u.last_login_at ? timeAgo(u.last_login_at) : "Never"}</Td>
                     {manage && (
                       <Td align="right">
                         <IconButton label={`Edit ${u.name}`} onClick={() => setEditing(u)}>

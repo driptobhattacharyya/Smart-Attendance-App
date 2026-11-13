@@ -77,7 +77,7 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-6 flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1 basis-72">
         <h1 className="text-xl font-semibold tracking-tight text-balance">{title}</h1>
         {description && <p className="mt-1 max-w-2xl text-sm text-muted text-pretty">{description}</p>}
       </div>

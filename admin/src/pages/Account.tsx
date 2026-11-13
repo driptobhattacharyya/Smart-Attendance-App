@@ -19,7 +19,7 @@ export function Account() {
     <>
       <PageHeader title="Account" description="Your profile, password and the devices signed in as you." />
       <div className="grid gap-6 xl:grid-cols-2">
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           <Profile />
           <ChangePassword />
         </div>
@@ -145,7 +145,7 @@ function Sessions() {
   });
 
   return (
-    <Card as="section" className="self-start">
+    <Card as="section" className="min-w-0 self-start">
       <CardHeader
         title="Where you are signed in"
         description="Each browser or phone that holds a sign-in. Sign out any you do not recognise."
@@ -172,7 +172,7 @@ function Sessions() {
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                    <span className="truncate">{s.device_label ?? "Unknown device"}</span>
+                    <span className="truncate">{s.device_label === "signup" ? "Browser used to sign up" : (s.device_label ?? "Unknown device")}</span>
                     {s.current && <Badge tone="success">This device</Badge>}
                   </p>
                   <p className="truncate text-xs text-muted" title={s.user_agent ?? undefined}>
