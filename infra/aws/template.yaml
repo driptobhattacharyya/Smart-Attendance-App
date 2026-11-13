@@ -1,0 +1,174 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Attendify API - FastAPI on AWS Lambda (container image + Lambda Web Adapter) behind a Function URL
+
+Parameters:
+  DatabaseUrl:
+    Type: String
+    NoEcho: true
+    Description: >-
+      PostgreSQL URL for the attendify_app role (RLS-restricted), through a transaction pooler,
+      e.g. postgresql://attendify_app:PASSWORD@pooler-host:6543/postgres
+  DatabaseSystemUrl:
+    Type: String
+    NoEcho: true
+    Description: PostgreSQL URL for the attendify_system role (BYPASSRLS; signup, login lookup, desk device auth)
+  DataKey:
+    Type: String
+    NoEcho: true
+    MinLength: 44
+    Description: base64 of 32 random bytes (python -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())"); encrypts device secrets at rest
+  InternalJobSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Shared secret for /api/v1/internal/* scheduled jobs (EventBridge)
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Long random string used to sign login tokens
+  OriginSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Shared secret the Cloudflare proxy sends as X-Origin-Auth (same value as ORIGIN_SECRET in Pages)
+  AllowSignup:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  PublicOrigin:
+    Type: String
+    Default: https://smartattendance.driptobhattacharyya.com
+    Description: Browser origin of the admin panel (only used for CORS; normally unused behind the proxy)
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 1024
+
+Resources:
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-api"
+      RetentionInDays: 30
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ApiLogGroup
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-api"
+      PackageType: Image
+      # python:3.12-slim, uv, the Lambda Web Adapter and all wheels have linux/arm64 builds.
+      Architectures: [arm64]
+      Environment:
+        Variables:
+          ENVIRONMENT: production
+          DATABASE_URL: !Ref DatabaseUrl
+          DATABASE_SYSTEM_URL: !Ref DatabaseSystemUrl
+          DATA_KEY: !Ref DataKey
+          INTERNAL_JOB_SECRET: !Ref InternalJobSecret
+          DB_NULL_POOL: "true" # Lambda in front of a transaction pooler: no client-side pool
+          JWT_SECRET: !Ref JwtSecret
+          ORIGIN_SECRET: !Ref OriginSecret
+          CORS_ORIGINS: !Ref PublicOrigin
+          ALLOW_SIGNUP: !Ref AllowSignup
+      FunctionUrlConfig:
+        AuthType: NONE # protected by the X-Origin-Auth shared secret inside the app
+        InvokeMode: BUFFERED
+    Metadata:
+      Dockerfile: Dockerfile.lambda
+      DockerContext: ../../backend
+      DockerTag: latest
+
+  # ---- scheduled jobs ----------------------------------------------------------------------
+  # EventBridge calls the internal job endpoints through the Function URL with the shared secret
+  # (header X-Internal-Job-Secret, held by the Connection in Secrets Manager). Those paths are
+  # exempt from the X-Origin-Auth check (backend/app/origin_auth.py) because the secret protects
+  # them.
+  JobsConnection:
+    Type: AWS::Events::Connection
+    Properties:
+      Name: !Sub "${AWS::StackName}-jobs"
+      AuthorizationType: API_KEY
+      AuthParameters:
+        ApiKeyAuthParameters:
+          ApiKeyName: X-Internal-Job-Secret
+          ApiKeyValue: !Ref InternalJobSecret
+
+  CloseStaleDestination:
+    Type: AWS::Events::ApiDestination
+    Properties:
+      Name: !Sub "${AWS::StackName}-close-stale-sessions"
+      ConnectionArn: !GetAtt JobsConnection.Arn
+      HttpMethod: POST
+      InvocationEndpoint: !Sub "${ApiFunctionUrl.FunctionUrl}api/v1/internal/jobs/close-stale-sessions"
+      InvocationRateLimitPerSecond: 1
+
+  RetentionDestination:
+    Type: AWS::Events::ApiDestination
+    Properties:
+      Name: !Sub "${AWS::StackName}-retention"
+      ConnectionArn: !GetAtt JobsConnection.Arn
+      HttpMethod: POST
+      InvocationEndpoint: !Sub "${ApiFunctionUrl.FunctionUrl}api/v1/internal/jobs/retention"
+      InvocationRateLimitPerSecond: 1
+
+  JobsInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-job-destinations
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: events:InvokeApiDestination
+                Resource:
+                  - !GetAtt CloseStaleDestination.Arn
+                  - !GetAtt RetentionDestination.Arn
+
+  CloseStaleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-close-stale-sessions"
+      Description: Auto check-out sessions whose phone stopped reporting (every 5 minutes)
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Id: close-stale-sessions
+          Arn: !GetAtt CloseStaleDestination.Arn
+          RoleArn: !GetAtt JobsInvokeRole.Arn
+          Input: "{}"
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+
+  RetentionRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-retention"
+      Description: Delete presence samples and strip coordinates past the retention window (daily)
+      ScheduleExpression: cron(30 21 * * ? *)
+      State: ENABLED
+      Targets:
+        - Id: retention
+          Arn: !GetAtt RetentionDestination.Arn
+          RoleArn: !GetAtt JobsInvokeRole.Arn
+          Input: "{}"
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+
+Outputs:
+  FunctionUrl:
+    Description: Set this as API_ORIGIN in Cloudflare Pages (no trailing slash needed)
+    Value: !GetAtt ApiFunctionUrl.FunctionUrl
+  FunctionName:
+    Value: !Ref ApiFunction

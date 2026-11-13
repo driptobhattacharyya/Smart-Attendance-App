@@ -1,0 +1,64 @@
+name: Desk app build
+
+on:
+  push:
+    paths:
+      - "desk/**"
+      - ".github/workflows/desk-build.yml"
+    tags:
+      - "desk-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desk-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: desk/uv.lock
+      - run: uv sync --all-groups --frozen
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+      - name: Build exe
+        run: uv run --frozen --group build pyinstaller attendify_desk.spec --noconfirm
+      - name: Smoke test exe exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/AttendifyDesk.exe)) { throw "exe missing" }
+          Get-Item dist/AttendifyDesk.exe | Select-Object Name, Length, VersionInfo | Format-List
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AttendifyDesk
+          path: desk/dist/AttendifyDesk.exe
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/desk-v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AttendifyDesk
+      - name: Attach exe to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+                 --title "Attendify Desk ${GITHUB_REF_NAME#desk-v}" --notes "Attendify Desk for Windows."
+          gh release upload "$GITHUB_REF_NAME" AttendifyDesk.exe --clobber --repo "$GITHUB_REPOSITORY"

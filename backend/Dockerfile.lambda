@@ -1,0 +1,46 @@
+# AWS Lambda (container image) build, using the AWS Lambda Web Adapter so the plain
+# FastAPI/uvicorn app runs unchanged. Multi-arch: build for arm64 (Graviton, ~20% cheaper) or
+# x86_64; python:3.12-slim, the uv image, the adapter image and every wheel we use
+# (opencv-python-headless, numpy, argon2-cffi-bindings, pydantic-core) ship aarch64 builds.
+#
+#   docker build --platform linux/arm64 -f Dockerfile.lambda -t attendify-api .
+
+# ---- build stage: dependencies + face models (curl and uv stay out of the final image) ----
+FROM python:3.12-slim AS build
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /usr/local/bin/uv
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+COPY scripts ./scripts
+RUN sh scripts/download_models.sh /app/models
+
+# ---- runtime stage ----
+FROM python:3.12-slim
+# Pinned Lambda Web Adapter: starts the app, waits for the readiness check, then proxies
+# Lambda invocations (Function URL events) to it as ordinary HTTP requests.
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.9.1 /lambda-adapter /opt/extensions/lambda-adapter
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    PATH="/app/.venv/bin:$PATH" \
+    HOME=/tmp \
+    FACE_MODELS_DIR=/app/models \
+    PORT=8000 \
+    AWS_LWA_READINESS_CHECK_PATH=/api/v1/health \
+    AWS_LWA_ASYNC_INIT=true
+WORKDIR /app
+COPY --from=build /app/.venv /app/.venv
+COPY --from=build /app/models /app/models
+COPY app ./app
+COPY alembic.ini ./alembic.ini
+COPY alembic ./alembic
+
+# Lambda runs the container as an arbitrary unprivileged user on a read-only filesystem
+# (only /tmp is writable), so there is no USER line; everything above is world-readable.
+EXPOSE 8000
+# --proxy-headers so request.url / client IP honour X-Forwarded-* set by the Pages Function.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--no-access-log"]

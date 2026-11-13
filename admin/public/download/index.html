@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Download Attendify</title>
+    <style>
+      :root { color-scheme: light dark; --bg: #f6f7f9; --card: #fff; --fg: #14181f; --muted: #5b6573; --accent: #2457d6; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #0f1218; --card: #181d26; --fg: #eef1f6; --muted: #9aa5b5; --accent: #6b95ff; } }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+      main { max-width: 440px; width: 100%; background: var(--card); border-radius: 16px; padding: 28px 24px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }
+      h1 { margin: 0 0 4px; font-size: 1.5rem; }
+      p { color: var(--muted); margin: 8px 0; }
+      a.btn { display: block; margin: 20px 0 12px; padding: 14px; text-align: center; border-radius: 10px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; }
+      a.btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+      ol { color: var(--muted); padding-left: 20px; }
+      small { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Attendify for Android</h1>
+      <p id="meta">Checking for the latest version...</p>
+      <a id="apk" class="btn" href="#" aria-disabled="true">Download APK</a>
+      <p>Install steps:</p>
+      <ol>
+        <li>Open this page on your Android phone and tap Download.</li>
+        <li>When asked, allow installing apps from your browser ("install unknown apps").</li>
+        <li>Open the downloaded file and tap Install, then sign in with your work account.</li>
+      </ol>
+      <small>iPhone users: ask your administrator for the TestFlight invitation.</small>
+    </main>
+    <script>
+      fetch("/download/latest.json", { cache: "no-cache" })
+        .then((r) => (r.ok ? r.json() : Promise.reject()))
+        .then((info) => {
+          const meta = document.getElementById("meta");
+          if (!info.url) { meta.textContent = "No build has been published yet. Please check back soon."; return; }
+          const a = document.getElementById("apk");
+          a.href = info.url;
+          a.removeAttribute("aria-disabled");
+          meta.textContent = "Latest version" + (info.version ? " " + info.version : "") + (info.updated ? " (" + info.updated + ")" : "") + ".";
+        })
+        .catch(() => { document.getElementById("meta").textContent = "Could not load build information."; });
+    </script>
+  </body>
+</html>

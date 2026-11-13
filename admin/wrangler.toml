@@ -1,0 +1,6 @@
+name = "smartattendance"
+compatibility_date = "2025-09-01"
+pages_build_output_dir = "dist"
+
+# Do not put secrets here. API_ORIGIN and ORIGIN_SECRET are set with
+# `npx wrangler pages secret put <NAME> --project-name smartattendance` (see infra/cloudflare/README.md).

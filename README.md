@@ -1,54 +1,89 @@
-# Attendify Mobile App
+# Attendify
 
-This GitHub repository contains only the code for the mobile app, developed using React Native. Creating new accounts is currently unavailable, so....
+Attendify is a smart attendance system. An employee's time only counts while three things hold at once: the phone is inside the office geofence, the employee has passed a face check to start a session, and the phone hears their desk Bluetooth beacon. The server stamps every session with its own timestamps and decides what counts, so being in the building but away from your desk is recorded as away time, not worked time. Desk beacons (iBeacon) are part of the v2 design in [`docs/api-contract-v2.md`](docs/api-contract-v2.md).
 
-#### Use these credentials instead
-**employee ID:** EMP003
-**password:** password
+## Repository layout
 
+| Path | Contents |
+|---|---|
+| `backend/` | FastAPI API on MongoDB: auth, offices, face verification (OpenCV), check-in/out, requests, manager and admin endpoints. |
+| `admin/` | Admin panel for managers and admins (React and Vite). |
+| `mobile/` | Employee app (React Native with Expo). |
+| `desk/` | Attendify Desk: Windows tray app that makes an office computer the Bluetooth beacon (Python). |
+| `docs/` | Design documents, including the API contract. |
+| `infra/` | Deployment templates. |
 
-## Features
+## Quick start (local development)
 
-1. **Location-Based Tracking:** Automated detection of entry and exit using geofencing to ensure accurate attendance logs.
+You need Python 3.11+ with [uv](https://docs.astral.sh/uv/), Node.js, and Docker (for MongoDB).
 
-2. **Bluetooth Proximity Monitoring:** Tracks employee proximity to their assigned workspace, triggering timers and notifications for efficiency.
+### 1. Database
 
-3. **Facial Recognition:** Advanced authentication via face recognition ensures security and reliability.
+```bash
+docker run -p 27017:27017 mongo:7
+```
 
-4. **End-of-Day Summaries:** Attendance data consolidated and sent to the backend for detailed analysis.
+### 2. Backend
 
-5. **Attendance Reports:** Comprehensive reports with visually appealing graphs and summaries for individuals and teams.
+```bash
+cd backend
+cp .env.example .env
+uv sync
+sh scripts/download_models.sh
+uv run uvicorn app.main:app --reload
+```
 
-6. **Manager Tools:** Manage team attendance with features like manual time adjustments, attendance correction approvals, and action logs.
+The API is served at `http://localhost:8000` under `/api`, with interactive docs at `/docs`. Without the face models the API still starts, but face verification is disabled. To reach the API from a phone on your network, add `--host 0.0.0.0`.
 
+Seed an office and the first accounts. The coordinates are the office location, and the script prints a generated password for each account it creates:
 
-## Getting started with development:
-1. Install dependencies
+```bash
+uv run python -m scripts.seed --lat <latitude> --lon <longitude> --tz Asia/Kolkata
+```
 
-   ```bash
-   npm install
-   ```
+### 3. Admin panel
 
-2. Start the app
+```bash
+cd admin
+npm install
+npm run dev
+```
 
-   ```bash
-    npx expo start
-   ```
+Open `http://localhost:5173` and sign in with a manager or admin account from the seed. The API address defaults to `http://localhost:8000/api`; override it with `VITE_API_URL` in `admin/.env` (see `admin/.env.example`).
 
-In the output, you'll find options to open the app in a
+### 4. Mobile app
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+```bash
+cd mobile
+cp .env.example .env    # set EXPO_PUBLIC_API_URL
+npm install
+npx expo run:android
+```
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+- Build a **development build**, not Expo Go. Bluetooth and the camera do not work in Expo Go. `npx expo run:android` builds and installs one.
+- `EXPO_PUBLIC_API_URL` must point at your computer's LAN IP, for example `http://192.168.1.10:8000/api`. `localhost` means the phone itself. On the Android emulator, use `http://10.0.2.2:8000/api`.
 
+## Tests
 
+```bash
+cd backend && uv run pytest     # uses an in-memory MongoDB mock, no database needed
+cd backend && uv run ruff check .
+cd mobile && npx jest           # single run; `npm test` starts watch mode
+cd admin && npm run build       # the admin panel has no unit tests yet
+```
 
-## Learn more about Expo
+## Documentation
 
-To learn more about developing your project with Expo, look at the following resources:
+- [`docs/api-contract-v2.md`](docs/api-contract-v2.md): the API contract shared by the backend, mobile app and admin panel.
+- [`docs/deploy.md`](docs/deploy.md): deployment guide (in progress).
+- Interactive API reference: `/docs` on a running backend.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## History
+
+This repository consolidates earlier projects into one monorepo:
+
+- **AttendifyBackend** and **wolverine-deadpool**: earlier Flask backends, replaced by `backend/`.
+- **adminsmartattendance**: an earlier admin panel mock-up, replaced by `admin/`.
+- **SmartAttendance** and **Smart-Attendance**: unrelated Flutter experiments.
+
+The older repositories are to be archived.
