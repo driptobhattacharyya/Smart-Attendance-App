@@ -208,7 +208,7 @@ async def verify(ctx: Ctx, token: str, files: list[UploadFile]) -> JSONResponse:
     now = utcnow()
     try:
         challenge = verify_challenge_token(
-            token, challenge_key(ctx.settings), subject=str(ctx.user_id), now=now.timestamp()
+            token, challenge_key(ctx.settings), subject=str(ctx.user_id)
         )
     except ChallengeError as exc:
         code = "challenge_expired" if exc.reason == "expired" else "invalid_challenge"

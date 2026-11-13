@@ -309,7 +309,7 @@ async def _check_in(ctx: Ctx, data: CheckInIn) -> CheckInOut:
     if open_session is not None:
         if await expire_if_needed(ctx.db, open_session, now, env.policies) is None:
             raise conflict(
-                "already_checked_in", "You are already checked in", session_id=open_session.id
+                "already_checked_in", "You are already checked in", session_id=str(open_session.id)
             )
         await recompute_days(ctx.db, env.user, [open_session.day], now=now, office=env.office)
 

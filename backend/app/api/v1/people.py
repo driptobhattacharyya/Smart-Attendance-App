@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from ...auth.deps import Ctx, CurrentCtx
 from ...auth.schemas import MessageOut, SessionOut
 from ...auth.service import list_sessions
+from ...attendance import export
 from ...core.pagination import Page
 from ...people import service
 from ...people.schemas import (
@@ -31,6 +32,12 @@ Viewer = Annotated[Ctx, Depends(require_any_permission(PEOPLE_MANAGE, PEOPLE_VIE
 @router.get("/people/me", response_model=MeOut)
 async def get_me(ctx: CurrentCtx):
     return await service.me(ctx)
+
+
+@router.get("/people/me/export")
+async def export_me(ctx: CurrentCtx):
+    """Everything held about the caller (right of access); allowed after consent is withdrawn."""
+    return await export.export_me(ctx)
 
 
 @router.patch("/people/me", response_model=MeOut)
